@@ -6,8 +6,9 @@ own business. Like the rest of ``fruitbox.engine`` it is pure Python: no pygame,
 no imports from ``fruitbox.solver`` or ``fruitbox.ui`` (SPEC.md section 7).
 
 The rules relating a :class:`~fruitbox.engine.moves.Move` to a board live on
-``BoardState`` itself; this module re-exposes the legality rule as the free
-function :func:`is_legal_move` for callers that prefer that shape.
+``BoardState`` itself -- :meth:`~fruitbox.engine.board.BoardState.is_legal` and
+:meth:`~fruitbox.engine.board.BoardState.apply_move`. This module holds no
+legality logic of its own; it delegates to the board and adds only the score.
 
 The engine -- not ``BoardState`` -- owns "reset to initial state" (FR12). Because
 ``grid`` is mutated destructively as moves are applied, ``BoardState`` cannot
@@ -21,25 +22,6 @@ from dataclasses import dataclass
 
 from .board import BoardState, Grid
 from .moves import Move
-
-
-def is_legal_move(state: BoardState, move: Move) -> bool:
-    """Return whether ``move`` is legal on ``state`` (SPEC.md FR2).
-
-    A thin wrapper over :meth:`BoardState.is_legal`, which holds the actual
-    rule (in-bounds, and cell values summing to the target). It is kept as a
-    free function so callers holding a state and a candidate move -- a future
-    hint or solver caller enumerating possibilities, say -- can check legality
-    without reaching through the state object.
-
-    Args:
-        state: The board to test the move against. Not mutated.
-        move: The candidate rectangle.
-
-    Returns:
-        ``True`` if the move may be played on ``state``, else ``False``.
-    """
-    return state.is_legal(move)
 
 
 @dataclass(frozen=True)
