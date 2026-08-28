@@ -19,7 +19,7 @@ from fruitbox.config import (
     MIN_CELL_VALUE,
     TARGET_SUM,
 )
-from fruitbox.engine.board import BoardState, generate_board
+from fruitbox.engine.board import BoardState
 from fruitbox.engine.moves import Move
 
 # A 4x4 hand-authored layout with known legal and illegal rectangles:
@@ -28,12 +28,15 @@ from fruitbox.engine.moves import Move
 #   - row 2, cols 0-3 (1x4)     -> 0+0+9+1 = 10, legal, only 2 apples removed
 #   - col 0, rows 1-3 (3x1)     -> 4+0+6   = 10, legal, only 2 apples removed
 #   - row 0, cols 0-1           -> 1+2     =  3, illegal (too low)
+#
+# It holds 3 empty cells -- (2,0), (2,1), (3,2) -- so 13 apples in total.
 LAYOUT = [
     [1, 2, 3, 5],
     [4, 3, 2, 1],
     [0, 0, 9, 1],
     [6, 8, 0, 5],
 ]
+LAYOUT_APPLES = 13
 
 SQUARE = Move(row_start=0, col_start=0, row_end=1, col_end=1)
 ROW_OVER_EMPTIES = Move(row_start=2, col_start=0, row_end=2, col_end=3)
@@ -48,6 +51,26 @@ def _board() -> BoardState:
 
 def _total(state: BoardState) -> int:
     return sum(sum(row) for row in state.grid)
+
+
+# --- BoardState.apples_remaining -------------------------------------------
+
+
+def test_apples_remaining_is_computed_from_the_grid_when_not_supplied():
+    # LAYOUT holds 3 empty cells, so 13 of its 16 cells are apples.
+    assert _board().apples_remaining == LAYOUT_APPLES
+
+
+def test_apples_remaining_counts_every_cell_of_a_fully_occupied_board():
+    state = BoardState(grid=[[1, 2, 3], [4, 5, 6], [7, 8, 9]], rows=3, cols=3)
+
+    assert state.apples_remaining == 9
+
+
+def test_apples_remaining_is_zero_on_an_empty_grid():
+    state = BoardState(grid=[[0, 0], [0, 0]], rows=2, cols=2)
+
+    assert state.apples_remaining == 0
 
 
 # --- BoardState.copy() -----------------------------------------------------
@@ -75,8 +98,25 @@ def test_copy_preserves_dimensions_and_contents():
     assert clone.rows == original.rows == 3
     assert clone.cols == original.cols == 3
     assert clone.grid == original.grid
+    assert clone.apples_remaining == original.apples_remaining == 9
     # The row lists must be distinct objects, not shared references.
     assert all(a is not b for a, b in zip(clone.grid, original.grid))
+
+
+def test_copy_carries_over_the_current_apple_count_mid_game():
+    # The count must ride along as-is rather than being rederived: a copy taken
+    # after play starts describes the played board, not a fresh one.
+    original = _board()
+    original.apply_move(SQUARE)
+
+    clone = original.copy()
+
+    assert clone.apples_remaining == original.apples_remaining == LAYOUT_APPLES - 4
+    # And the two counts move independently from there.
+    clone.apply_move(ROW_OVER_EMPTIES)
+
+    assert clone.apples_remaining == LAYOUT_APPLES - 6
+    assert original.apples_remaining == LAYOUT_APPLES - 4
 
 
 def test_copy_of_original_does_not_alias_after_mutating_original():
@@ -103,6 +143,7 @@ def test_apply_move_zeroes_exactly_the_rectangle_and_returns_the_count():
         [0, 0, 9, 1],  # untouched
         [6, 8, 0, 5],  # untouched
     ]
+    assert state.apples_remaining == LAYOUT_APPLES - 4
 
 
 def test_apply_move_spanning_empty_cells_returns_removals_not_rectangle_area():
@@ -118,6 +159,8 @@ def test_apply_move_spanning_empty_cells_returns_removals_not_rectangle_area():
         [0, 0, 0, 0],  # the two apples cleared, the two empties left alone
         [6, 8, 0, 5],
     ]
+    # Decremented by the apples actually removed, not by the rectangle's area.
+    assert state.apples_remaining == LAYOUT_APPLES - 2
 
 
 def test_apply_move_spanning_an_empty_cell_vertically_returns_two():
@@ -148,6 +191,7 @@ def test_successive_apply_moves_each_report_their_own_removals():
         [0, 0, 0, 0],
         [6, 8, 0, 5],
     ]
+    assert state.apples_remaining == LAYOUT_APPLES - 6
 
 
 # --- BoardState.apply_move(): rejected moves -------------------------------
@@ -160,6 +204,7 @@ def test_apply_move_rejects_a_rectangle_that_does_not_sum_to_the_target():
         state.apply_move(ILLEGAL)  # 1 + 2 == 3
 
     assert state.grid == LAYOUT
+    assert state.apples_remaining == LAYOUT_APPLES
 
 
 def test_apply_move_rejects_an_out_of_bounds_rectangle():
@@ -221,8 +266,8 @@ def test_verify_rejects_out_of_range_cell_value():
 
 
 def test_same_seed_produces_identical_boards():
-    first = generate_board(seed=42)
-    second = generate_board(seed=42)
+    first = BoardState.generate_board(seed=42)
+    second = BoardState.generate_board(seed=42)
 
     assert first.grid == second.grid
 
@@ -230,9 +275,9 @@ def test_same_seed_produces_identical_boards():
 def test_different_seeds_produce_different_boards():
     # Not a strict mathematical guarantee, but with 170 cells a collision is
     # astronomically unlikely.
-    a = generate_board(seed=1)
-    b = generate_board(seed=2)
-    c = generate_board(seed=3)
+    a = BoardState.generate_board(seed=1)
+    b = BoardState.generate_board(seed=2)
+    c = BoardState.generate_board(seed=3)
 
     assert a.grid != b.grid
     assert b.grid != c.grid
@@ -246,8 +291,8 @@ def test_generation_does_not_disturb_global_random_state():
     expected = [random.random() for _ in range(3)]
 
     random.seed(12345)
-    generate_board(seed=7)
-    generate_board()
+    BoardState.generate_board(seed=7)
+    BoardState.generate_board()
     actual = [random.random() for _ in range(3)]
 
     assert actual == expected
@@ -258,21 +303,21 @@ def test_generation_does_not_disturb_global_random_state():
 
 @pytest.mark.parametrize("seed", [0, 1, 42, 99, 1234, 20260828])
 def test_total_sum_is_multiple_of_ten_default_grid(seed):
-    state = generate_board(seed=seed)
+    state = BoardState.generate_board(seed=seed)
 
     assert _total(state) % TARGET_SUM == 0
 
 
 @pytest.mark.parametrize("seed", [0, 1, 42, 99, 1234, 20260828])
 def test_total_sum_is_multiple_of_ten_small_grid(seed):
-    state = generate_board(rows=3, cols=3, seed=seed)
+    state = BoardState.generate_board(rows=3, cols=3, seed=seed)
 
     assert _total(state) % TARGET_SUM == 0
 
 
 @pytest.mark.parametrize("rows,cols", [(1, 2), (2, 2), (3, 3), (4, 7), (10, 17)])
 def test_total_sum_is_multiple_of_ten_across_shapes(rows, cols):
-    state = generate_board(rows=rows, cols=cols, seed=2024)
+    state = BoardState.generate_board(rows=rows, cols=cols, seed=2024)
 
     assert _total(state) % TARGET_SUM == 0
 
@@ -282,7 +327,7 @@ def test_total_sum_is_multiple_of_ten_across_shapes(rows, cols):
 
 @pytest.mark.parametrize("seed", [0, 5, 42, 777])
 def test_all_cells_within_value_range(seed):
-    state = generate_board(seed=seed)
+    state = BoardState.generate_board(seed=seed)
 
     for row in state.grid:
         for value in row:
@@ -292,7 +337,7 @@ def test_all_cells_within_value_range(seed):
 
 @pytest.mark.parametrize("rows,cols", [(1, 2), (3, 3), (10, 17)])
 def test_dimensions_match_requested_shape(rows, cols):
-    state = generate_board(rows=rows, cols=cols, seed=11)
+    state = BoardState.generate_board(rows=rows, cols=cols, seed=11)
 
     assert state.rows == rows
     assert state.cols == cols
@@ -301,7 +346,7 @@ def test_dimensions_match_requested_shape(rows, cols):
 
 
 def test_defaults_come_from_config():
-    state = generate_board(seed=3)
+    state = BoardState.generate_board(seed=3)
 
     assert state.rows == GRID_ROWS
     assert state.cols == GRID_COLS
@@ -315,7 +360,7 @@ def test_defaults_come_from_config():
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])
 def test_minimum_board_of_two_cells(seed):
     """rows*cols - 2 == 0: the whole board is just the two adjusted cells."""
-    state = generate_board(rows=1, cols=2, seed=seed)
+    state = BoardState.generate_board(rows=1, cols=2, seed=seed)
 
     assert state.rows == 1
     assert state.cols == 2
@@ -330,7 +375,7 @@ def test_minimum_board_of_two_cells(seed):
 
 def test_unseeded_generation_still_satisfies_invariants():
     for _ in range(5):
-        state = generate_board()
+        state = BoardState.generate_board()
 
         assert state.rows == GRID_ROWS
         assert state.cols == GRID_COLS

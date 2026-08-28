@@ -77,7 +77,7 @@ def test_new_engine_starts_at_zero_score_with_every_apple_remaining():
     engine = _engine()
 
     assert engine.score == 0
-    assert engine.apples_remaining == LAYOUT_APPLES
+    assert engine.board.apples_remaining == LAYOUT_APPLES
 
 
 def test_engine_plays_on_the_board_object_it_was_given():
@@ -214,7 +214,7 @@ def test_successive_moves_accumulate_score_and_drain_the_apple_count():
     engine.apply_move(ROW_OVER_EMPTIES)  # 2 apples, 4 cells of area
 
     assert engine.score == 6
-    assert engine.apples_remaining == LAYOUT_APPLES - 6
+    assert engine.board.apples_remaining == LAYOUT_APPLES - 6
 
 
 def test_apply_move_returns_none():
@@ -246,7 +246,7 @@ def test_illegal_move_propagates_value_error_without_touching_any_state():
 
     assert engine.board.grid == grid_before
     assert engine.score == 0
-    assert engine.apples_remaining == LAYOUT_APPLES
+    assert engine.board.apples_remaining == LAYOUT_APPLES
 
 
 # --- get_state -------------------------------------------------------------
@@ -262,7 +262,7 @@ def test_get_state_reports_the_live_board_and_current_counters():
     assert isinstance(state, GameState)
     assert state.board is engine.board
     assert state.score == engine.score == 6
-    assert state.apples_remaining == engine.apples_remaining == LAYOUT_APPLES - 6
+    assert state.board.apples_remaining == LAYOUT_APPLES - 6
 
 
 def test_get_state_apple_count_matches_a_direct_scan_of_the_grid():
@@ -272,7 +272,7 @@ def test_get_state_apple_count_matches_a_direct_scan_of_the_grid():
     state = engine.get_state()
     scanned = sum(1 for row in state.board.grid for value in row if value != 0)
 
-    assert state.apples_remaining == scanned
+    assert state.board.apples_remaining == scanned
 
 
 def test_get_state_on_a_fresh_engine_reflects_the_starting_board():
@@ -282,7 +282,7 @@ def test_get_state_on_a_fresh_engine_reflects_the_starting_board():
 
     assert state.board.grid == LAYOUT
     assert state.score == 0
-    assert state.apples_remaining == LAYOUT_APPLES
+    assert state.board.apples_remaining == LAYOUT_APPLES
 
 
 # --- is_terminal -----------------------------------------------------------
@@ -306,7 +306,7 @@ def test_fully_cleared_board_is_terminal():
     engine.apply_move(Move(row_start=0, col_start=0, row_end=0, col_end=1))  # 4+6
     engine.apply_move(Move(row_start=1, col_start=0, row_end=1, col_end=1))  # 1+9
 
-    assert engine.apples_remaining == 0
+    assert engine.board.apples_remaining == 0
     assert engine.board.grid == [[0, 0], [0, 0]]
     assert engine.is_terminal()
 
@@ -314,7 +314,7 @@ def test_fully_cleared_board_is_terminal():
 def test_engine_loaded_on_an_already_empty_board_is_terminal():
     engine = GameEngine.load([[0, 0], [0, 0]])
 
-    assert engine.apples_remaining == 0
+    assert engine.board.apples_remaining == 0
     assert engine.is_terminal()
 
 
@@ -335,7 +335,7 @@ def test_load_produces_a_working_engine_reflecting_the_given_layout():
 
     assert state.board.grid == LAYOUT
     assert state.score == 0
-    assert state.apples_remaining == LAYOUT_APPLES
+    assert state.board.apples_remaining == LAYOUT_APPLES
 
 
 def test_loaded_engine_can_play_a_legal_move():
@@ -369,7 +369,7 @@ def test_reset_restores_grid_score_and_apple_count_after_play():
 
     assert engine.board.grid == LAYOUT
     assert engine.score == 0
-    assert engine.apples_remaining == LAYOUT_APPLES
+    assert engine.board.apples_remaining == LAYOUT_APPLES
 
 
 def test_reset_on_an_unplayed_engine_is_a_no_op():
@@ -379,7 +379,7 @@ def test_reset_on_an_unplayed_engine_is_a_no_op():
 
     assert engine.board.grid == LAYOUT
     assert engine.score == 0
-    assert engine.apples_remaining == LAYOUT_APPLES
+    assert engine.board.apples_remaining == LAYOUT_APPLES
 
 
 def test_reset_keeps_the_same_board_object():
@@ -405,7 +405,7 @@ def test_reset_twice_around_different_play_still_restores_the_original():
 
     assert engine.board.grid == LAYOUT
     assert engine.score == 0
-    assert engine.apples_remaining == LAYOUT_APPLES
+    assert engine.board.apples_remaining == LAYOUT_APPLES
 
 
 def test_play_after_reset_behaves_like_a_fresh_game():
@@ -416,7 +416,7 @@ def test_play_after_reset_behaves_like_a_fresh_game():
     engine.apply_move(SQUARE)
 
     assert engine.score == 4
-    assert engine.apples_remaining == LAYOUT_APPLES - 4
+    assert engine.board.apples_remaining == LAYOUT_APPLES - 4
 
 
 def test_reset_restores_a_fully_cleared_board():

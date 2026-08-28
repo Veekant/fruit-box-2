@@ -1,9 +1,9 @@
 """The playable game: applying moves, scoring, state reporting, and reset.
 
 :class:`GameEngine` is the layer that wraps a :class:`~fruitbox.engine.board.BoardState`
-with the score and apple counters a played game needs (SPEC.md FR3-FR6). Like the
-rest of ``fruitbox.engine`` it is pure Python: no pygame, and no imports from
-``fruitbox.solver`` or ``fruitbox.ui`` (SPEC.md section 7).
+with the score a played game needs (SPEC.md FR3-FR6); the apple count is the board's
+own business. Like the rest of ``fruitbox.engine`` it is pure Python: no pygame, and
+no imports from ``fruitbox.solver`` or ``fruitbox.ui`` (SPEC.md section 7).
 
 The rules relating a :class:`~fruitbox.engine.moves.Move` to a board live on
 ``BoardState`` itself; this module re-exposes the legality rule as the free
@@ -42,15 +42,6 @@ def is_legal_move(state: BoardState, move: Move) -> bool:
     return state.is_legal(move)
 
 
-def _count_apples(grid: Grid) -> int:
-    """Return the number of occupied (nonzero) cells in ``grid``.
-
-    There is no separate occupancy mask: a nonzero cell *is* an apple, and a 0
-    is an empty cell (SPEC.md section 2, section 8).
-    """
-    return sum(1 for row in grid for value in row if value != 0)
-
-
 @dataclass(frozen=True)
 class GameState:
     """A snapshot of what the engine currently reports (SPEC.md FR4).
@@ -62,17 +53,22 @@ class GameState:
     directly rather than copying on every access -- callers that want an
     independent board to mutate should call ``state.board.copy()``.
 
-    ``score`` and ``apples_remaining`` are plain ints and so are genuine
-    point-in-time values, unaffected by later moves.
+    ``score`` is a plain int and so is a genuine point-in-time value, unaffected
+    by later moves. The apple count is deliberately *not* duplicated here: it
+    lives on the board as ``state.board.apples_remaining``, which -- like
+    ``board.grid`` -- reads through to the live board.
     """
 
     board: BoardState
     score: int
-    apples_remaining: int
 
 
 class GameEngine:
-    """Plays moves against a board, tracking score and apples remaining.
+    """Plays moves against a board, tracking the score.
+
+    The apple count is not an engine-level counter: ``BoardState`` maintains its
+    own ``apples_remaining`` as moves are applied, and this layer simply reads
+    ``self.board.apples_remaining`` when it needs one.
 
     The engine mutates its ``board`` in place (via :meth:`apply_move`) rather
     than producing new states, keeping the hot path allocation-free for the UI
@@ -91,14 +87,13 @@ class GameEngine:
         """
         self.board = state
         self.score = 0
-        self.apples_remaining = _count_apples(state.grid)
 
         # A private, never-mutated snapshot of the starting layout. BoardState
         # deliberately does not retain its own initial grid, so retaining one is
-        # this layer's job (SPEC.md section 8). Cached alongside it: the initial
-        # apple count, so reset() need not rescan.
+        # this layer's job (SPEC.md section 8). The starting apple count rides
+        # along on the snapshot, since copy() carries `apples_remaining` over --
+        # so reset() need not rescan either.
         self._initial_state: BoardState = state.copy()
-        self._initial_apples: int = self.apples_remaining
 
     @classmethod
     def load(cls, grid: Grid) -> "GameEngine":
@@ -130,17 +125,17 @@ class GameEngine:
     def apply_move(self, move: Move) -> None:
         """Play ``move``, clearing its cells and scoring them (SPEC.md FR3).
 
-        The legality check and the clearing itself both belong to
-        :meth:`BoardState.apply_move`; this layer only keeps the counters in
-        step with the removals it reports. The score increases by the number of
-        cells that were **actually nonzero** before the move -- not by the
-        rectangle's area -- so a rectangle that spans already-cleared cells
-        scores only the apples it really removed.
+        The legality check, the clearing itself, and the board's own apple
+        count all belong to :meth:`BoardState.apply_move`; this layer only keeps
+        the score in step with the removals it reports. The score increases by
+        the number of cells that were **actually nonzero** before the move --
+        not by the rectangle's area -- so a rectangle that spans already-cleared
+        cells scores only the apples it really removed.
 
         Nothing is mutated unless the move is legal; a rejected move leaves the
         grid, score, and apple count exactly as they were, since the board
-        raises before touching a cell and the counters are only updated after
-        it returns.
+        raises before touching a cell and the score is only updated after it
+        returns.
 
         Args:
             move: The rectangle to clear. Must be legal on the current board.
@@ -152,19 +147,15 @@ class GameEngine:
         removed = self.board.apply_move(move)
 
         self.score += removed
-        self.apples_remaining -= removed
 
     def get_state(self) -> GameState:
-        """Report the current grid, score, and apples remaining (SPEC.md FR4).
+        """Report the current board and score (SPEC.md FR4).
 
-        ``apples_remaining`` is the counter maintained incrementally by
-        :meth:`apply_move`, not a fresh scan of the grid.
+        The apple count is reached through the reported board, as
+        ``get_state().board.apples_remaining`` -- the counter ``BoardState``
+        maintains incrementally, not a fresh scan of the grid.
         """
-        return GameState(
-            board=self.board,
-            score=self.score,
-            apples_remaining=self.apples_remaining,
-        )
+        return GameState(board=self.board, score=self.score)
 
     def is_terminal(self) -> bool:
         """Return whether the board has been fully cleared.
@@ -174,12 +165,12 @@ class GameEngine:
         nonzero cells remain", which would require scanning for move
         availability. By explicit product decision for the MVP, this engine
         instead treats terminal as simply "the board is empty"
-        (``apples_remaining == 0``). This is the intended final behaviour for
-        this method, not a placeholder for a legal-move scan: a board with
+        (``board.apples_remaining == 0``). This is the intended final behaviour
+        for this method, not a placeholder for a legal-move scan: a board with
         apples left but no playable rectangle is *not* reported as terminal
         here.
         """
-        return self.apples_remaining == 0
+        return self.board.apples_remaining == 0
 
     def reset(self) -> None:
         """Restore the board to its starting layout and zero the score (FR12).
@@ -190,7 +181,11 @@ class GameEngine:
         row lists are freshly copied out of the private snapshot, which is never
         handed out and never mutated -- so ``reset`` may be called any number of
         times and always reproduces the identical starting board.
+
+        The board's own ``apples_remaining`` is restored from the snapshot too:
+        it is maintained incrementally, so restoring the grid alone would leave
+        it stale.
         """
         self.board.grid = [row[:] for row in self._initial_state.grid]
+        self.board.apples_remaining = self._initial_state.apples_remaining
         self.score = 0
-        self.apples_remaining = self._initial_apples
