@@ -1,4 +1,4 @@
-"""Board state representation and seeded board generation.
+"""Board state representation, move legality/application, and seeded generation.
 
 This module is pure Python with no pygame (or solver, or UI) dependency: it sits
 at the bottom of the dependency graph described in SPEC.md section 7.
@@ -16,6 +16,7 @@ import random
 from dataclasses import dataclass
 
 from ..config import GRID_COLS, GRID_ROWS, MAX_CELL_VALUE, MIN_CELL_VALUE, TARGET_SUM
+from .moves import Move
 
 #: ``grid[row][col]`` is the cell's current value; 0 means empty (never occupied,
 #: or already removed), 1-9 means occupied at that value.
@@ -33,6 +34,12 @@ class BoardState:
     The discipline this mutability requires: solver code must **never** mutate a
     ``BoardState`` it does not own. Before exploring a hypothetical move during
     lookahead or search, call :meth:`copy` and mutate the copy instead.
+
+    A board also owns the rules that relate it to a
+    :class:`~fruitbox.engine.moves.Move`: :meth:`is_legal` decides whether a
+    rectangle may be played (FR2) and :meth:`apply_move` plays one. Both live
+    here rather than on ``Move`` because both need the board's dimensions and
+    cell values; ``Move`` itself stays purely geometric.
 
     Note that ``BoardState`` intentionally does not retain the board's initial
     layout. Supporting "reset to initial state" (FR12) is a ``GameEngine``-layer
@@ -60,6 +67,67 @@ class BoardState:
             min_value=self.min_value,
             max_value=self.max_value,
         )
+
+    def is_legal(self, move: Move) -> bool:
+        """Return whether ``move`` is legal on this board (SPEC.md FR2).
+
+        A move is legal if and only if its rectangle lies entirely within the
+        grid and the sum of the rectangle's current cell values is exactly
+        ``TARGET_SUM``. Empty cells hold 0 and so contribute nothing -- spanning
+        cleared cells is fine, and no separate occupancy check is needed.
+
+        This board is assumed well-formed (``grid`` really is ``rows`` x
+        ``cols``); validating that is :meth:`verify`'s job, not this hot path's.
+
+        Args:
+            move: The candidate rectangle. Not mutated, and neither is this
+                board. ``Move``'s constructor already guarantees it is
+                non-negative and correctly ordered, so only the grid's upper
+                extent needs checking here.
+
+        Returns:
+            ``True`` if the move may be played on this board, else ``False``.
+        """
+        # Bounds first, and return early on failure: the sum below indexes into
+        # the grid, so a rectangle running off the board must never reach it.
+        if move.row_end >= self.rows or move.col_end >= self.cols:
+            return False
+
+        return sum(self.grid[row][col] for row, col in move.cells()) == TARGET_SUM
+
+    def apply_move(self, move: Move) -> int:
+        """Play ``move``: zero its still-occupied cells and report how many.
+
+        Legality is checked here via :meth:`is_legal`, so nothing is mutated
+        unless the move is legal -- a rejected move leaves the grid exactly as
+        it was.
+
+        Args:
+            move: The rectangle to clear. Must be legal on this board.
+
+        Returns:
+            The number of cells that were **actually nonzero** before the move
+            -- not the rectangle's area. A rectangle spanning already-cleared
+            cells therefore reports only the apples it really removed.
+
+        Raises:
+            ValueError: If ``move`` is out of bounds or its cells do not sum to
+                the target.
+        """
+        if not self.is_legal(move):
+            raise ValueError(
+                f"illegal move: rectangle rows {move.row_start}-{move.row_end}, "
+                f"cols {move.col_start}-{move.col_end} is out of bounds or does "
+                f"not sum to the target"
+            )
+
+        removed = 0
+        for row, col in move.cells():
+            if self.grid[row][col] != 0:
+                removed += 1
+                self.grid[row][col] = 0
+
+        return removed
 
     def verify(self) -> None:
         """Assert this board's structural invariants hold.

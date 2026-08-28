@@ -1,23 +1,21 @@
-"""Move representation and move legality checking.
+"""Move representation.
 
 A move is an axis-aligned rectangle of grid cells (SPEC.md section 2, section 8).
 Like :mod:`fruitbox.engine.board`, this module is pure Python with no pygame,
-solver, or UI dependency.
+solver, or UI dependency -- and, deliberately, no dependency on anything else in
+this project either. A ``Move`` is purely geometric: it knows nothing about any
+particular board.
 
-Legality (FR2) is deliberately just two checks: the rectangle must lie inside the
-grid, and the sum of the cells' **current** values must equal ``TARGET_SUM``.
-There is no separate occupancy check, because empty cells hold 0 and so
-contribute nothing to the sum -- a rectangle may freely span already-cleared
-cells alongside occupied ones.
+Legality (FR2) therefore lives elsewhere. The rules themselves are implemented by
+:meth:`fruitbox.engine.board.BoardState.is_legal`, with the free-function form
+:func:`fruitbox.engine.game.is_legal_move` wrapping it. Keeping legality out of
+this module is what lets ``board`` import ``Move`` without a circular import.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Iterator
-
-from ..config import TARGET_SUM
-from .board import BoardState
 
 
 @dataclass(frozen=True)
@@ -27,18 +25,17 @@ class Move:
     Degenerate shapes are valid ``Move`` shapes: a 1x1 single cell and 1xN / Nx1
     lines all construct fine. A 1x1 move can never be *legal*, since a single
     cell holds either 0 or 1-9 and so never sums to 10 -- but that falls out of
-    the sum check in :func:`is_legal_move` rather than being special-cased here
-    (SPEC.md section 2).
+    the sum check in :meth:`~fruitbox.engine.board.BoardState.is_legal` rather
+    than being special-cased here (SPEC.md section 2).
 
     A ``Move`` must be well-formed at construction: endpoints in order
     (``row_start <= row_end``, ``col_start <= col_end``) and no negative
     coordinates. Violating either raises ``ValueError`` rather than being
     silently repaired, so a malformed rectangle surfaces at the point it was
-    built instead of turning into a mystery ``False`` from
-    :func:`is_legal_move` further downstream. Callers that work in unordered
-    corners -- notably a UI drag, whose release corner may be above/left of its
-    anchor -- are responsible for ordering the two corners before constructing
-    the ``Move``.
+    built instead of turning into a mystery ``False`` from a legality check
+    further downstream. Callers that work in unordered corners -- notably a UI
+    drag, whose release corner may be above/left of its anchor -- are
+    responsible for ordering the two corners before constructing the ``Move``.
     """
 
     row_start: int
@@ -81,31 +78,3 @@ class Move:
         for row in range(self.row_start, self.row_end + 1):
             for col in range(self.col_start, self.col_end + 1):
                 yield (row, col)
-
-
-def is_legal_move(state: BoardState, move: Move) -> bool:
-    """Return whether ``move`` is legal on ``state`` (SPEC.md FR2).
-
-    A move is legal if and only if its rectangle lies entirely within the grid
-    and the sum of the rectangle's current cell values is exactly ``TARGET_SUM``.
-    Empty cells hold 0 and so contribute nothing -- spanning cleared cells is
-    fine, and no separate occupancy check is needed.
-
-    ``state`` is assumed well-formed (``grid`` really is ``rows`` x ``cols``);
-    validating that is :meth:`BoardState.verify`'s job, not this hot path's.
-
-    Args:
-        state: The board to test the move against. Not mutated.
-        move: The candidate rectangle. Guaranteed by ``Move``'s constructor to
-            be non-negative and correctly ordered, so only the grid's upper
-            extent needs checking here.
-
-    Returns:
-        ``True`` if the move may be played on ``state``, else ``False``.
-    """
-    # Bounds first, and return early on failure: the sum below indexes into the
-    # grid, so a rectangle running off the board must never reach it.
-    if move.row_end >= state.rows or move.col_end >= state.cols:
-        return False
-
-    return sum(state.grid[row][col] for row, col in move.cells()) == TARGET_SUM

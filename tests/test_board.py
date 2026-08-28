@@ -1,8 +1,13 @@
-"""Tests for board state and seeded board generation (issue #2).
+"""Tests for board state, move application, and seeded generation (issues #2, #4).
 
-Covers SPEC.md FR1 (generation with a guaranteed multiple-of-10 total), section 8
-(``BoardState`` and its ``copy()`` deep-copy contract), and NFR5 (seed
-reproducibility). All headless -- no display, no pygame.
+Covers SPEC.md FR1 (generation with a guaranteed multiple-of-10 total), FR3
+(``apply_move`` clears a legal rectangle and reports the apples it really
+removed), section 8 (``BoardState`` and its ``copy()`` deep-copy contract), and
+NFR5 (seed reproducibility). All headless -- no display, no pygame.
+
+The legality *rule* behind ``apply_move`` is exercised through the
+``is_legal_move`` free function in ``test_game.py``; what is tested here is that
+``apply_move`` enforces it and mutates correctly when it passes.
 """
 
 import pytest
@@ -15,6 +20,30 @@ from fruitbox.config import (
     TARGET_SUM,
 )
 from fruitbox.engine.board import BoardState, generate_board
+from fruitbox.engine.moves import Move
+
+# A 4x4 hand-authored layout with known legal and illegal rectangles:
+#
+#   - rows 0-1, cols 0-1 (2x2)  -> 1+2+4+3 = 10, legal, 4 apples removed
+#   - row 2, cols 0-3 (1x4)     -> 0+0+9+1 = 10, legal, only 2 apples removed
+#   - col 0, rows 1-3 (3x1)     -> 4+0+6   = 10, legal, only 2 apples removed
+#   - row 0, cols 0-1           -> 1+2     =  3, illegal (too low)
+LAYOUT = [
+    [1, 2, 3, 5],
+    [4, 3, 2, 1],
+    [0, 0, 9, 1],
+    [6, 8, 0, 5],
+]
+
+SQUARE = Move(row_start=0, col_start=0, row_end=1, col_end=1)
+ROW_OVER_EMPTIES = Move(row_start=2, col_start=0, row_end=2, col_end=3)
+COL_OVER_EMPTY = Move(row_start=1, col_start=0, row_end=3, col_end=0)
+ILLEGAL = Move(row_start=0, col_start=0, row_end=0, col_end=1)  # sums to 3
+
+
+def _board() -> BoardState:
+    """A fresh 4x4 ``BoardState`` on ``LAYOUT`` (never the shared list)."""
+    return BoardState(grid=[row[:] for row in LAYOUT], rows=4, cols=4)
 
 
 def _total(state: BoardState) -> int:
@@ -57,6 +86,110 @@ def test_copy_of_original_does_not_alias_after_mutating_original():
     original.grid[0][0] = 0
 
     assert clone.grid[0][0] == 1
+
+
+# --- BoardState.apply_move(): legal moves ----------------------------------
+
+
+def test_apply_move_zeroes_exactly_the_rectangle_and_returns_the_count():
+    state = _board()
+
+    removed = state.apply_move(SQUARE)
+
+    assert removed == 4
+    assert state.grid == [
+        [0, 0, 3, 5],  # cols 0-1 cleared
+        [0, 0, 2, 1],  # cols 0-1 cleared
+        [0, 0, 9, 1],  # untouched
+        [6, 8, 0, 5],  # untouched
+    ]
+
+
+def test_apply_move_spanning_empty_cells_returns_removals_not_rectangle_area():
+    # row 2 is 0+0+9+1: a 4-cell rectangle that removes only 2 apples.
+    state = _board()
+
+    removed = state.apply_move(ROW_OVER_EMPTIES)
+
+    assert removed == 2
+    assert state.grid == [
+        [1, 2, 3, 5],
+        [4, 3, 2, 1],
+        [0, 0, 0, 0],  # the two apples cleared, the two empties left alone
+        [6, 8, 0, 5],
+    ]
+
+
+def test_apply_move_spanning_an_empty_cell_vertically_returns_two():
+    # col 0, rows 1-3: 4+0+6, so 3 cells of area but only 2 apples.
+    state = _board()
+
+    removed = state.apply_move(COL_OVER_EMPTY)
+
+    assert removed == 2
+    assert state.grid == [
+        [1, 2, 3, 5],  # untouched: the rectangle starts at row 1
+        [0, 3, 2, 1],
+        [0, 0, 9, 1],
+        [0, 8, 0, 5],
+    ]
+
+
+def test_successive_apply_moves_each_report_their_own_removals():
+    state = _board()
+
+    first = state.apply_move(SQUARE)
+    second = state.apply_move(ROW_OVER_EMPTIES)
+
+    assert (first, second) == (4, 2)
+    assert state.grid == [
+        [0, 0, 3, 5],
+        [0, 0, 2, 1],
+        [0, 0, 0, 0],
+        [6, 8, 0, 5],
+    ]
+
+
+# --- BoardState.apply_move(): rejected moves -------------------------------
+
+
+def test_apply_move_rejects_a_rectangle_that_does_not_sum_to_the_target():
+    state = _board()
+
+    with pytest.raises(ValueError):
+        state.apply_move(ILLEGAL)  # 1 + 2 == 3
+
+    assert state.grid == LAYOUT
+
+
+def test_apply_move_rejects_an_out_of_bounds_rectangle():
+    # In bounds this row sums to 10, but col_end 9 runs off the 4-wide board.
+    state = _board()
+
+    with pytest.raises(ValueError):
+        state.apply_move(Move(row_start=2, col_start=0, row_end=2, col_end=9))
+
+    assert state.grid == LAYOUT
+
+
+def test_apply_move_rejects_a_rectangle_entirely_off_the_board():
+    state = _board()
+
+    with pytest.raises(ValueError):
+        state.apply_move(Move(row_start=10, col_start=10, row_end=11, col_end=11))
+
+    assert state.grid == LAYOUT
+
+
+def test_replaying_an_already_cleared_rectangle_is_rejected():
+    state = _board()
+    state.apply_move(SQUARE)
+    grid_after_first = [row[:] for row in state.grid]
+
+    with pytest.raises(ValueError):
+        state.apply_move(SQUARE)  # now all zeros, so it sums to 0
+
+    assert state.grid == grid_after_first
 
 
 # --- BoardState.verify() ---------------------------------------------------

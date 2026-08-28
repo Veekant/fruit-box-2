@@ -1,9 +1,13 @@
 """The playable game: applying moves, scoring, state reporting, and reset.
 
-:class:`GameEngine` is the layer that ties a :class:`~fruitbox.engine.board.BoardState`
-together with :class:`~fruitbox.engine.moves.Move` legality (SPEC.md FR3-FR6).
-Like the rest of ``fruitbox.engine`` it is pure Python: no pygame, and no imports
-from ``fruitbox.solver`` or ``fruitbox.ui`` (SPEC.md section 7).
+:class:`GameEngine` is the layer that wraps a :class:`~fruitbox.engine.board.BoardState`
+with the score and apple counters a played game needs (SPEC.md FR3-FR6). Like the
+rest of ``fruitbox.engine`` it is pure Python: no pygame, and no imports from
+``fruitbox.solver`` or ``fruitbox.ui`` (SPEC.md section 7).
+
+The rules relating a :class:`~fruitbox.engine.moves.Move` to a board live on
+``BoardState`` itself; this module re-exposes the legality rule as the free
+function :func:`is_legal_move` for callers that prefer that shape.
 
 The engine -- not ``BoardState`` -- owns "reset to initial state" (FR12). Because
 ``grid`` is mutated destructively as moves are applied, ``BoardState`` cannot
@@ -16,7 +20,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from .board import BoardState, Grid
-from .moves import Move, is_legal_move
+from .moves import Move
+
+
+def is_legal_move(state: BoardState, move: Move) -> bool:
+    """Return whether ``move`` is legal on ``state`` (SPEC.md FR2).
+
+    A thin wrapper over :meth:`BoardState.is_legal`, which holds the actual
+    rule (in-bounds, and cell values summing to the target). It is kept as a
+    free function so callers holding a state and a candidate move -- a future
+    hint or solver caller enumerating possibilities, say -- can check legality
+    without reaching through the state object.
+
+    Args:
+        state: The board to test the move against. Not mutated.
+        move: The candidate rectangle.
+
+    Returns:
+        ``True`` if the move may be played on ``state``, else ``False``.
+    """
+    return state.is_legal(move)
 
 
 def _count_apples(grid: Grid) -> int:
@@ -107,33 +130,26 @@ class GameEngine:
     def apply_move(self, move: Move) -> None:
         """Play ``move``, clearing its cells and scoring them (SPEC.md FR3).
 
-        Every still-occupied cell in the rectangle is set to 0 in place. The
-        score increases by the number of cells that were **actually nonzero**
-        before the move -- not by the rectangle's area -- so a rectangle that
-        spans already-cleared cells scores only the apples it really removed.
+        The legality check and the clearing itself both belong to
+        :meth:`BoardState.apply_move`; this layer only keeps the counters in
+        step with the removals it reports. The score increases by the number of
+        cells that were **actually nonzero** before the move -- not by the
+        rectangle's area -- so a rectangle that spans already-cleared cells
+        scores only the apples it really removed.
 
         Nothing is mutated unless the move is legal; a rejected move leaves the
-        grid, score, and apple count exactly as they were.
+        grid, score, and apple count exactly as they were, since the board
+        raises before touching a cell and the counters are only updated after
+        it returns.
 
         Args:
             move: The rectangle to clear. Must be legal on the current board.
 
         Raises:
             ValueError: If ``move`` is out of bounds or its cells do not sum to
-                the target.
+                the target. Propagated from :meth:`BoardState.apply_move`.
         """
-        if not is_legal_move(self.board, move):
-            raise ValueError(
-                f"illegal move: rectangle rows {move.row_start}-{move.row_end}, "
-                f"cols {move.col_start}-{move.col_end} is out of bounds or does "
-                f"not sum to the target"
-            )
-
-        removed = 0
-        for row, col in move.cells():
-            if self.board.grid[row][col] != 0:
-                removed += 1
-                self.board.grid[row][col] = 0
+        removed = self.board.apply_move(move)
 
         self.score += removed
         self.apples_remaining -= removed
