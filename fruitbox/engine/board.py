@@ -40,8 +40,8 @@ class BoardState:
     """
 
     grid: Grid
-    rows: int
-    cols: int
+    rows: int = GRID_ROWS
+    cols: int = GRID_COLS
     min_value: int = MIN_CELL_VALUE
     max_value: int = MAX_CELL_VALUE
 
@@ -149,6 +149,7 @@ def generate_board(
         for b in range(min_value, max_value + 1)
         if (a + b) % TARGET_SUM == needed
     ]
+    assert len(candidates) > 0, "Zero candidates for last 2 values."
     second_to_last, last = rng.choice(candidates)
     values.append(second_to_last)
     values.append(last)
