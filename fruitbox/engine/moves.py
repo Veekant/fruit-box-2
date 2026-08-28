@@ -6,10 +6,10 @@ solver, or UI dependency -- and, deliberately, no dependency on anything else in
 this project either. A ``Move`` is purely geometric: it knows nothing about any
 particular board.
 
-Legality (FR2) therefore lives elsewhere. The rules themselves are implemented by
-:meth:`fruitbox.engine.board.BoardState.is_legal`, with the free-function form
-:func:`fruitbox.engine.game.is_legal_move` wrapping it. Keeping legality out of
-this module is what lets ``board`` import ``Move`` without a circular import.
+Legality (FR2) therefore lives elsewhere: it is implemented by
+:meth:`fruitbox.engine.board.BoardState.is_legal`, which owns the rule outright.
+Keeping legality out of this module is what lets ``board`` import ``Move``
+without a circular import.
 """
 
 from __future__ import annotations

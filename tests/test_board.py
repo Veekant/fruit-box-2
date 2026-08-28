@@ -1,13 +1,14 @@
-"""Tests for board state, move application, and seeded generation (issues #2, #4).
+"""Tests for board state, legality, move application, and seeded generation.
 
-Covers SPEC.md FR1 (generation with a guaranteed multiple-of-10 total), FR3
+Covers SPEC.md FR1 (generation with a guaranteed multiple-of-10 total), FR2
+(``is_legal``: bounds and sum, with empty cells contributing 0), FR3
 (``apply_move`` clears a legal rectangle and reports the apples it really
 removed), section 8 (``BoardState`` and its ``copy()`` deep-copy contract), and
 NFR5 (seed reproducibility). All headless -- no display, no pygame.
 
-The legality *rule* behind ``apply_move`` is exercised through the
-``is_legal_move`` free function in ``test_game.py``; what is tested here is that
-``apply_move`` enforces it and mutates correctly when it passes.
+The FR2 legality tests live here, alongside the ``apply_move`` tests that depend
+on them, because ``BoardState.is_legal`` is where the rule actually lives:
+``game.py`` holds no legality code of its own and merely delegates to the board.
 """
 
 import pytest
@@ -22,12 +23,15 @@ from fruitbox.config import (
 from fruitbox.engine.board import BoardState
 from fruitbox.engine.moves import Move
 
-# A 4x4 hand-authored layout with known legal and illegal rectangles:
+# A 4x4 hand-authored layout carrying a witness for every legality and
+# apply_move case below:
 #
 #   - rows 0-1, cols 0-1 (2x2)  -> 1+2+4+3 = 10, legal, 4 apples removed
-#   - row 2, cols 0-3 (1x4)     -> 0+0+9+1 = 10, legal, only 2 apples removed
-#   - col 0, rows 1-3 (3x1)     -> 4+0+6   = 10, legal, only 2 apples removed
+#   - row 2, cols 0-3 (1x4)     -> 0+0+9+1 = 10, legal across empties, 2 removed
+#   - col 0, rows 1-3 (3x1)     -> 4+0+6   = 10, legal across an empty, 2 removed
 #   - row 0, cols 0-1           -> 1+2     =  3, illegal (too low)
+#   - row 0, cols 0-3           -> 1+2+3+5 = 11, illegal (too high)
+#   - row 2, cols 0-1           -> 0+0     =  0, illegal (all-empty)
 #
 # It holds 3 empty cells -- (2,0), (2,1), (3,2) -- so 13 apples in total.
 LAYOUT = [
@@ -126,6 +130,124 @@ def test_copy_of_original_does_not_alias_after_mutating_original():
     original.grid[0][0] = 0
 
     assert clone.grid[0][0] == 1
+
+
+# --- BoardState.is_legal(): legal ------------------------------------------
+
+
+def test_rectangle_summing_to_ten_is_legal():
+    # rows 0-1, cols 0-1: 1 + 2 + 4 + 3 == 10
+    assert _board().is_legal(SQUARE)
+
+
+def test_rectangle_spanning_empty_cells_is_legal():
+    # row 2: 0 + 0 + 9 + 1 == 10. The two empty cells contribute nothing and do
+    # not disqualify the rectangle (SPEC.md section 2: no occupancy check).
+    assert _board().is_legal(ROW_OVER_EMPTIES)
+
+
+def test_vertical_rectangle_spanning_an_empty_cell_is_legal():
+    # col 0, rows 1-3: 4 + 0 + 6 == 10
+    assert _board().is_legal(COL_OVER_EMPTY)
+
+
+def test_cells_cleared_by_a_move_behave_like_empties_for_later_moves():
+    # The design invariant behind having no separate occupancy mask (SPEC.md
+    # section 2, section 8): a cell zeroed by an earlier move is indistinguishable
+    # from one authored empty. LAYOUT's empties are hand-authored, so this uses a
+    # board where the empties are made by play.
+    state = BoardState(grid=[[6, 4, 1], [2, 8, 9], [5, 5, 3]], rows=3, cols=3)
+    state.apply_move(Move(row_start=0, col_start=0, row_end=0, col_end=1))  # 6+4
+
+    # rows 0-1, cols 0-1 is now 0 + 0 + 2 + 8: legal only because the two cells
+    # the first move cleared count as 0.
+    spanning_cleared = Move(row_start=0, col_start=0, row_end=1, col_end=1)
+
+    assert state.is_legal(spanning_cleared)
+    # And it removes 2 apples, not the rectangle's 4 cells.
+    assert state.apply_move(spanning_cleared) == 2
+    assert state.grid == [[0, 0, 1], [0, 0, 9], [5, 5, 3]]
+    assert state.apples_remaining == 5
+
+
+def test_legality_check_does_not_mutate_the_board():
+    state = _board()
+    before = [row[:] for row in state.grid]
+
+    state.is_legal(SQUARE)
+
+    assert state.grid == before
+
+
+# --- BoardState.is_legal(): illegal sums -----------------------------------
+
+
+def test_sum_below_target_is_illegal():
+    # row 0, cols 0-1: 1 + 2 == 3
+    assert not _board().is_legal(ILLEGAL)
+
+
+def test_sum_above_target_is_illegal():
+    # row 0, cols 0-3: 1 + 2 + 3 + 5 == 11
+    assert not _board().is_legal(Move(row_start=0, col_start=0, row_end=0, col_end=3))
+
+
+def test_all_empty_rectangle_is_illegal():
+    # row 2, cols 0-1: 0 + 0 == 0
+    assert not _board().is_legal(Move(row_start=2, col_start=0, row_end=2, col_end=1))
+
+
+def test_single_cell_move_is_never_legal():
+    # SPEC.md section 2's explicit degenerate-shape case: a 1x1 rectangle holds
+    # either 0 or 1-9, so it can never sum to 10. Falls out of the sum check --
+    # there is no special-cased size rule in the code.
+    state = _board()
+
+    for row, col in [(0, 0), (2, 2), (3, 1), (2, 0)]:
+        move = Move(row_start=row, col_start=col, row_end=row, col_end=col)
+
+        assert not state.is_legal(move)
+
+
+# --- BoardState.is_legal(): out of bounds ----------------------------------
+
+
+def test_rectangle_extending_past_last_row_is_illegal():
+    # row_end == 4 on a 4-row board.
+    assert not _board().is_legal(Move(row_start=0, col_start=0, row_end=4, col_end=0))
+
+
+def test_rectangle_extending_past_last_col_is_illegal():
+    # col_end == 4 on a 4-column board.
+    assert not _board().is_legal(Move(row_start=0, col_start=0, row_end=0, col_end=4))
+
+
+def test_out_of_bounds_rectangle_returns_false_rather_than_raising():
+    # The in-bounds part of this rectangle (row 2, cols 0-3) does sum to 10, so
+    # this pins down that the bounds check runs first and short-circuits: the
+    # result is False, not an IndexError and not True.
+    state = _board()
+    move = Move(row_start=2, col_start=0, row_end=2, col_end=9)
+
+    assert not state.is_legal(move)
+
+
+def test_rectangle_entirely_outside_the_board_is_illegal():
+    assert not _board().is_legal(
+        Move(row_start=10, col_start=10, row_end=11, col_end=11)
+    )
+
+
+def test_move_legal_on_a_larger_board_is_out_of_bounds_on_a_smaller_one():
+    small = BoardState(grid=[[4, 6], [1, 2]], rows=2, cols=2)
+    large = BoardState(grid=[[4, 6, 1], [1, 2, 3], [7, 8, 9]], rows=3, cols=3)
+    # rows 0-2, col 0 on the 3x3: 4 + 1 + 7 == 12; rows 0-1 col 0 there is 5.
+    spanning = Move(row_start=0, col_start=0, row_end=2, col_end=0)
+
+    assert not small.is_legal(spanning)  # off the bottom of the 2x2
+    assert not large.is_legal(spanning)  # in bounds, but sums to 12
+    # Bounds are read from the state, not from module-level config.
+    assert small.is_legal(Move(row_start=0, col_start=0, row_end=0, col_end=1))
 
 
 # --- BoardState.apply_move(): legal moves ----------------------------------

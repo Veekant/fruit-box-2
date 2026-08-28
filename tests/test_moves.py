@@ -5,9 +5,8 @@ and the section 2 rule that a 1x1 rectangle is a valid *shape*, whatever its
 legality later turns out to be. All headless -- no display, no pygame.
 
 ``Move`` is purely geometric and knows nothing about any board, so legality
-(FR2) is not tested here: those tests live in ``test_game.py`` for the
-``is_legal_move`` free function and in ``test_board.py`` for
-``BoardState.apply_move``.
+(FR2) is not tested here: those tests live in ``test_board.py``, alongside the
+``BoardState.is_legal`` and ``BoardState.apply_move`` code that owns the rule.
 """
 
 import dataclasses
@@ -91,6 +90,19 @@ def test_negative_coordinates_are_rejected(row_start, col_start, row_end, col_en
             row_end=row_end,
             col_end=col_end,
         )
+
+
+def test_rejection_messages_distinguish_the_three_failure_modes():
+    # All three branches of __post_init__ raise the same exception type, so the
+    # message is the only thing telling them apart -- worth pinning down.
+    with pytest.raises(ValueError, match="inverted rectangle: row_start"):
+        Move(row_start=2, col_start=0, row_end=0, col_end=1)
+
+    with pytest.raises(ValueError, match="inverted rectangle: col_start"):
+        Move(row_start=0, col_start=3, row_end=1, col_end=1)
+
+    with pytest.raises(ValueError, match="negative coordinate"):
+        Move(row_start=-1, col_start=0, row_end=1, col_end=1)
 
 
 # --- Move: frozen dataclass semantics --------------------------------------
