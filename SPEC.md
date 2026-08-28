@@ -85,7 +85,7 @@ To keep scope controlled, the following are **out of scope** for this project un
 - FR2: Given a board state and a candidate rectangle, determine legality (bounds check, sum check — sum is computed over the rectangle's current cell values, with empty cells contributing 0; no separate occupancy check is needed, see §2).
 - FR3: Apply a legal move: set every still-occupied (nonzero) cell in the rectangle to 0 in place; update score by the count of cells that were actually nonzero before the move (not the rectangle's total area). `BoardState` must also support `copy()` so callers (notably the solver) can branch into hypothetical futures without disturbing the original state.
 - FR4: Report current state: grid values (0 = empty), score, count of apples remaining (count of nonzero cells).
-- FR5: Report whether the board is in a terminal state (no legal moves remain) regardless of whether nonzero cells remain.
+- FR5: Report whether the board is in a terminal state (no cells remain).
 - FR6: Support loading a board from a fixed layout (e.g., list of lists / file) for testing and reproducibility.
 
 ### 5.2 Pygame UI
