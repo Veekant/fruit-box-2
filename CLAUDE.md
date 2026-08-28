@@ -51,3 +51,10 @@ tests/          # headless pytest, no display required
 - Legal move enumeration over the full 17×10 board (~28,900 candidate rectangles) must stay well under 1 second — use a 2D prefix-sum array over `grid`, not per-rectangle summation.
 - Hint requests (FR13) must resolve well under 1 second — bounds any lookahead depth/beam width usable for hints specifically.
 - `attempt_full_clear` is an offline/on-demand analysis operation and may take up to a few minutes per board — do not conflate its budget with the hint-path budget.
+
+## Working process
+
+- For non-trivial changes, propose a plan first (files touched, ambiguities, testing approach) and wait for approval before writing code. Don't open PRs without explicit approval of the implementation.
+- When working from a GitHub issue, use `/implement-issue <issue-number>` instead of improvising the workflow yourself — it runs the full plan → approve → implement → approve → PR flow, with the actual coding delegated to the `opus-coder` subagent (Opus) while planning and PR writeup stay on the lighter default model.
+- Always read SPEC.md before proposing a plan or making architectural decisions — it's the source of truth for scope, data structures, and module boundaries. Don't rely on conversation history alone for this.
+- Keep `engine/`, `solver/`, and `ui/` decoupled per SPEC.md §7 — the solver must never import from `ui/`, and both `ui/` and `cli.py` must call into the same `solver/` functions rather than each having their own logic (see SPEC.md NFR1a).
