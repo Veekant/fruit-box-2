@@ -42,6 +42,8 @@ class BoardState:
     grid: Grid
     rows: int
     cols: int
+    min_value: int = MIN_CELL_VALUE
+    max_value: int = MAX_CELL_VALUE
 
     def copy(self) -> "BoardState":
         """Return an independent ``BoardState`` with its own grid.
@@ -55,7 +57,32 @@ class BoardState:
             grid=[row[:] for row in self.grid],
             rows=self.rows,
             cols=self.cols,
+            min_value=self.min_value,
+            max_value=self.max_value,
         )
+
+    def verify(self) -> None:
+        """Assert this board's structural invariants hold.
+
+        Checks that ``grid`` has exactly ``rows`` rows of exactly ``cols``
+        columns each, and that every cell is either 0 (empty) or within
+        ``[min_value, max_value]`` (occupied). Raises ``AssertionError`` with a
+        descriptive message on the first violation found; returns ``None`` if
+        every invariant holds. Intended for use in tests, e.g. ``state.verify()``.
+        """
+        assert len(self.grid) == self.rows, (
+            f"expected {self.rows} rows, got {len(self.grid)}"
+        )
+        for r, row in enumerate(self.grid):
+            assert len(row) == self.cols, (
+                f"row {r}: expected {self.cols} columns, got {len(row)}"
+            )
+        for r, row in enumerate(self.grid):
+            for c, value in enumerate(row):
+                assert value == 0 or self.min_value <= value <= self.max_value, (
+                    f"cell ({r}, {c}) holds {value}, expected 0 or a value in "
+                    f"[{self.min_value}, {self.max_value}]"
+                )
 
 
 def generate_board(
@@ -102,49 +129,35 @@ def generate_board(
     # TARGET_SUM.
     needed = (-running_sum) % TARGET_SUM
 
-    second_to_last, last = _pick_adjustment_pair(rng, needed, min_value, max_value)
-    values.append(second_to_last)
-    values.append(last)
-
-    grid: Grid = [values[r * cols : (r + 1) * cols] for r in range(rows)]
-    return BoardState(grid=grid, rows=rows, cols=cols)
-
-
-def _pick_adjustment_pair(
-    rng: random.Random,
-    needed: int,
-    min_value: int,
-    max_value: int,
-) -> tuple[int, int]:
-    """Pick the final two cell values, summing to ``needed`` mod ``TARGET_SUM``.
-
-    FR1 describes this as "pick the second-to-last cell uniformly at random,
-    derive the last cell, and re-roll if the derived value falls outside
-    ``[min_value, max_value]``". That rejection loop is unnecessary: the set of
-    second-to-last values admitting a valid partner is cheaply computable up
-    front, so we draw uniformly from *that* set directly and always succeed on
-    the first try. This is distributionally identical to re-rolling until a
-    valid pair appears (rejection sampling over a uniform draw yields a uniform
-    draw over the accepted values), just without the loop.
-
-    Concretely, for the default 1-9 range: if ``needed`` is 0 all nine values of
-    ``second_to_last`` work; otherwise the single choice ``second_to_last ==
-    needed`` is rejected because it would require a ``last`` of 0, leaving eight.
-    The candidate set is therefore never empty, which is the same guarantee FR1
-    relies on to argue its retry loop converges.
-    """
+    # Every ordered pair of in-range values whose sum lands on that residual.
+    #
+    # FR1 describes this step as "pick the second-to-last cell uniformly at
+    # random, derive the last cell, and re-roll if the derived value falls
+    # outside [min_value, max_value]". That rejection loop is unnecessary: the
+    # full set of valid pairs is cheaply computable up front, so we draw
+    # uniformly from *that* set directly and always succeed on the first try.
+    #
+    # The candidate set is never empty for any `needed` in [0, TARGET_SUM - 1],
+    # given at least one occupied value in [min_value, max_value] -- which is
+    # the same guarantee FR1 relies on to argue its retry loop terminates. For
+    # the default 1-9 range: if `needed` is 0 all nine values of `a` work;
+    # otherwise only `a == needed` is excluded (it would require a `last` of 0),
+    # leaving eight.
     candidates = [
         (a, b)
         for a in range(min_value, max_value + 1)
         for b in range(min_value, max_value + 1)
         if (a + b) % TARGET_SUM == needed
     ]
+    second_to_last, last = rng.choice(candidates)
+    values.append(second_to_last)
+    values.append(last)
 
-    # Draw the second-to-last cell uniformly over the values that admit a
-    # partner, then its partner uniformly among the values that pair with it.
-    # (For a value range narrower than TARGET_SUM -- the 1-9 default -- each
-    # `a` has exactly one partner, so this is just a uniform draw over `a`.)
-    valid_seconds = sorted({a for a, _ in candidates})
-    second_to_last = rng.choice(valid_seconds)
-    last = rng.choice([b for a, b in candidates if a == second_to_last])
-    return second_to_last, last
+    grid: Grid = [values[r * cols : (r + 1) * cols] for r in range(rows)]
+    return BoardState(
+        grid=grid,
+        rows=rows,
+        cols=cols,
+        min_value=min_value,
+        max_value=max_value,
+    )

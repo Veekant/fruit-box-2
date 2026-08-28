@@ -59,6 +59,31 @@ def test_copy_of_original_does_not_alias_after_mutating_original():
     assert clone.grid[0][0] == 1
 
 
+# --- BoardState.verify() ---------------------------------------------------
+
+
+def test_verify_accepts_well_formed_board():
+    state = BoardState(grid=[[1, 2, 3], [4, 5, 6], [7, 8, 9]], rows=3, cols=3)
+
+    assert state.verify() is None
+
+
+def test_verify_rejects_mismatched_dimensions():
+    # rows says 3, but the grid only holds 2 rows.
+    state = BoardState(grid=[[1, 2, 3], [4, 5, 6]], rows=3, cols=3)
+
+    with pytest.raises(AssertionError):
+        state.verify()
+
+
+def test_verify_rejects_out_of_range_cell_value():
+    # 42 is neither 0 (empty) nor within [MIN_CELL_VALUE, MAX_CELL_VALUE].
+    state = BoardState(grid=[[1, 2, 3], [4, 42, 6], [7, 8, 9]], rows=3, cols=3)
+
+    with pytest.raises(AssertionError):
+        state.verify()
+
+
 # --- generate_board: determinism (NFR5) ------------------------------------
 
 
