@@ -382,16 +382,6 @@ def test_reset_on_an_unplayed_engine_is_a_no_op():
     assert engine.board.apples_remaining == LAYOUT_APPLES
 
 
-def test_reset_keeps_the_same_board_object():
-    engine = _engine()
-    board_before = engine.board
-    engine.apply_move(SQUARE)
-
-    engine.reset()
-
-    assert engine.board is board_before
-
-
 def test_reset_twice_around_different_play_still_restores_the_original():
     engine = _engine()
 

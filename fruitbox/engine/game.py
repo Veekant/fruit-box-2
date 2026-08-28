@@ -186,6 +186,5 @@ class GameEngine:
         it is maintained incrementally, so restoring the grid alone would leave
         it stale.
         """
-        self.board.grid = [row[:] for row in self._initial_state.grid]
-        self.board.apples_remaining = self._initial_state.apples_remaining
+        self.board = self._initial_state.copy()
         self.score = 0
