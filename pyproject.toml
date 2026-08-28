@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "fruitbox"
+version = "0.1.0"
+description = "A Fruit Box clone with a decoupled solver/analyzer"
+requires-python = ">=3.10"
+
+# NFR6: standard library plus pygame (UI) and pytest (tests) only.
+dependencies = [
+    "pygame>=2.5",
+    "pytest>=7.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["fruitbox*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
