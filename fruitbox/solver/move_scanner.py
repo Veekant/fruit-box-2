@@ -18,6 +18,8 @@ same discipline ``BoardState``'s own docstring asks of all solver code.
 
 from __future__ import annotations
 
+from typing import Callable
+
 from ..config import TARGET_SUM
 from ..engine.board import BoardState
 from ..engine.moves import Move
@@ -29,7 +31,7 @@ def find_legal_moves(state: BoardState) -> list[Move]:
     A rectangle is legal iff it lies within the grid and its current cell
     values (empty cells contributing 0, per SPEC.md section 2) sum to exactly
     ``TARGET_SUM`` -- the same rule ``BoardState.is_legal`` checks, but
-    computed here via a 2D prefix-sum table (SPEC.md section 9.1) so every
+    computed here via a prefix-sum backed query (SPEC.md section 9.1) so every
     rectangle's sum is an O(1) lookup instead of an O(area) scan.
 
     Results are returned in a deterministic order, sorted by
@@ -51,39 +53,32 @@ def find_legal_moves(state: BoardState) -> list[Move]:
     if state.apples_remaining == 0:
         return []
 
-    grid = state.grid
     rows = state.rows
     cols = state.cols
-    prefix = _build_prefix_sums(state)
+    rectangle_sum = _build_prefix_sums(state)
 
     moves: list[Move] = []
     for row_start in range(rows):
         for col_start in range(cols):
-            # Running sum of the single column at col_start, over
-            # row_start..row_end. It is a lower bound on every rectangle
-            # sharing this row_start/col_start/row_end (every such rectangle
-            # contains this column segment) and non-decreasing as row_end
-            # grows, so once it exceeds TARGET_SUM no larger row_end -- at
-            # any col_end -- can be legal either.
-            col_sum = 0
             for row_end in range(row_start, rows):
-                col_sum += grid[row_end][col_start]
+                # Sum of the single column at col_start, over
+                # row_start..row_end. It is a lower bound on every rectangle
+                # sharing this row_start/col_start/row_end (every such rectangle
+                # contains this column segment) and non-decreasing as row_end
+                # grows, so once it exceeds TARGET_SUM no larger row_end -- at
+                # any col_end -- can be legal either.
+                col_sum = rectangle_sum(row_start, col_start, row_end, col_start)
                 if col_sum > TARGET_SUM:
                     break
 
                 for col_end in range(col_start, cols):
-                    total = (
-                        prefix[row_end + 1][col_end + 1]
-                        - prefix[row_start][col_end + 1]
-                        - prefix[row_end + 1][col_start]
-                        + prefix[row_start][col_start]
-                    )
-                    if total > TARGET_SUM:
+                    rect_sum = rectangle_sum(row_start, col_start, row_end, col_end)
+                    if rect_sum > TARGET_SUM:
                         # Non-negative cell values mean this sum only grows
                         # as col_end extends, so no larger col_end can be
                         # legal either.
                         break
-                    if total == TARGET_SUM:
+                    if rect_sum == TARGET_SUM:
                         moves.append(
                             Move(
                                 row_start=row_start,
@@ -96,14 +91,14 @@ def find_legal_moves(state: BoardState) -> list[Move]:
     return moves
 
 
-def _build_prefix_sums(state: BoardState) -> list[list[int]]:
-    """Build a zero-padded 2D inclusive prefix-sum table over ``state.grid``.
+def _build_prefix_sums(state: BoardState) -> Callable[[int, int, int, int], int]:
+    """Build and return a closure that looks up any rectangle's sum over ``state.grid`` in O(1).
 
-    ``table[r][c]`` is the sum of every cell strictly above and left of
-    ``(r, c)`` -- i.e. rows ``0..r-1`` and columns ``0..c-1`` of the grid. The
-    table is one row and one column larger than the grid so that any
-    rectangle's sum is the standard four-term inclusion-exclusion query with
-    no boundary special-casing.
+    Backed by a zero-padded 2D inclusive prefix-sum table, where ``table[r][c]``
+    is the sum of every cell strictly above and left of ``(r, c)`` -- i.e. rows
+    ``0..r-1`` and columns ``0..c-1`` of the grid. The table is one row and one
+    column larger than the grid so that any rectangle's sum is the standard
+    four-term inclusion-exclusion query with no boundary special-casing.
     """
     grid = state.grid
     rows = state.rows
@@ -114,4 +109,17 @@ def _build_prefix_sums(state: BoardState) -> list[list[int]]:
         for c in range(cols):
             table[r + 1][c + 1] = grid[r][c] + table[r][c + 1] + table[r + 1][c] - table[r][c]
 
-    return table
+    def _rectangle_sum(
+        row_start: int,
+        col_start: int,
+        row_end: int,
+        col_end: int,
+    ) -> int:
+        """Sum of the inclusive rectangle ``[row_start, row_end] x [col_start, col_end]``."""
+        total = table[row_end + 1][col_end + 1]
+        top = table[row_start][col_end + 1]
+        left = table[row_end + 1][col_start]
+        overlap = table[row_start][col_start]
+        return total - top - left + overlap
+
+    return _rectangle_sum
