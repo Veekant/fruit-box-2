@@ -111,9 +111,7 @@ def _build_prefix_sums(state: BoardState) -> list[list[int]]:
 
     table = [[0] * (cols + 1) for _ in range(rows + 1)]
     for r in range(rows):
-        row_sum = 0
         for c in range(cols):
-            row_sum += grid[r][c]
-            table[r + 1][c + 1] = table[r][c + 1] + row_sum
+            table[r + 1][c + 1] = grid[r][c] + table[r][c + 1] + table[r + 1][c] - table[r][c]
 
     return table
