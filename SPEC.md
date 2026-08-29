@@ -135,7 +135,7 @@ fruitbox/
 │
 ├── solver/
 │   ├── __init__.py
-│   ├── enumerate.py      # find_legal_moves: prefix-sum based rectangle search
+│   ├── move_scanner.py   # find_legal_moves: prefix-sum based rectangle search
 │   ├── strategies.py     # Pluggable move-ranking heuristics (greedy variants)
 │   ├── search.py         # Lookahead / bounded search (post-MVP; stub interface in MVP)
 │   └── analyzer.py       # is_solvable, play_greedy, play_lookahead — orchestration layer
@@ -153,7 +153,7 @@ tests/
 ├── test_board.py
 ├── test_moves.py
 ├── test_game.py
-├── test_enumerate.py
+├── test_move_scanner.py
 ├── test_strategies.py
 └── test_analyzer.py
 ```
@@ -219,13 +219,13 @@ Score representation: rectangle-sum queries use a 2D prefix-sum array (see §9.1
 
 The spec explicitly separates four distinct concerns. **Do not conflate these in one function.**
 
-### 9.1 Finding Legal Moves (`find_legal_moves`)
+### 9.1 Finding Legal Moves (`find_legal_moves`, implemented in `solver/move_scanner.py`, named to avoid shadowing Python's `enumerate` builtin)
 
 This is a well-defined, tractable subproblem: enumerate every axis-aligned rectangle in the grid whose cell-value sum (empty cells counted as 0, per §2) equals exactly 10.
 
 **Naive approach**: for every pair of corners (O(rows²·cols²) rectangles ≈ 17²×10² ≈ 28,900 candidates for the full grid), compute the sum in O(1) using a 2D prefix-sum array built directly from `grid`'s current values. No separate occupancy check is needed — empty cells are already 0 in `grid`, so the sum check alone determines legality. This is entirely feasible: ~29K O(1) checks is trivial for Python at interactive speed.
 
-**Further pruning (optional, not required for MVP)**: since all values are positive (1-9), any rectangle can be grown in a scanning fashion with an early cutoff — once a partial sum from a fixed top-left corner exceeds 10, no further growth in that direction can be legal. This bounds practical enumeration far below the worst case. Not required for MVP given the small grid; document as a future optimization if profiling shows it's needed.
+**Further pruning (optional, not required for MVP)**: since all values are positive (1-9), any rectangle can be grown in a scanning fashion with an early cutoff — once a partial sum from a fixed top-left corner exceeds 10, no further growth in that direction can be legal. This bounds practical enumeration far below the worst case. Not required for MVP given the small grid, but the MVP implementation includes it anyway: both cutoffs — stop extending the rectangle's right edge, and stop extending its bottom edge, once the running sum exceeds 10 — fall out naturally of the enumeration loop and cost nothing in clarity.
 
 **Output**: a list of `Move` objects. This function must be *exhaustive and correct* — every solver capability downstream depends on it.
 
