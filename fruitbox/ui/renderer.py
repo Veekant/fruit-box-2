@@ -18,15 +18,32 @@ placeholder, and SPEC.md sections 5.2/11 have been updated to match.
 Layout constants (cell size, the grid's screen origin, HUD strip height) live
 in ``fruitbox.config`` -- this module only holds colours and look-and-feel
 proportions, and the arithmetic (:func:`cell_rect`, :func:`grid_bounds`,
-:func:`window_size`) that combines the config constants with a cell index or
-grid size into actual pixel geometry. That arithmetic is the single place
-every draw call gets its numbers from, so a config tweak can't silently
-desync one call site from another. The reverse pixel-to-cell lookup lives in
-``ui/input.py`` -- derived independently from the same config constants
-rather than importing from this module, so ``ui/input.py`` stays
-pygame-free.
+:func:`window_size`, :func:`selection_rect`) that combines the config
+constants with a cell index or grid size into actual pixel geometry. That
+arithmetic is the single place every draw call gets its numbers from, so a
+config tweak can't silently desync one call site from another. The reverse
+pixel-to-cell lookup lives in ``ui/input.py`` -- derived independently from
+the same config constants rather than importing from this module, so
+``ui/input.py`` stays pygame-free.
 
-This module never mutates the ``BoardState`` it is given. Depends on
+**Deliberate simplification of SPEC.md FR9 and section 11** (same posture as
+the section 11/FR7 note above): live drag feedback is a **three-way color
+cue only** -- the selection rectangle is tinted yellow while its cell-value
+sum is under ``TARGET_SUM``, green exactly at it, and red once over -- with
+no numeric sum ever rendered on screen. This is strictly more informative
+than a binary legal/illegal cue (yellow means "keep dragging", red means
+"you've overshot"), which is what makes dropping the numeric readout an
+acceptable trade rather than a loss; SPEC.md sections 5.2/11 have been
+updated to match. There is consequently no boolean legality check anywhere
+in this module's drawing path -- :meth:`Renderer.draw_selection` reads
+:meth:`~fruitbox.engine.board.BoardState.move_sum` once and picks a colour
+off a three-way comparison, never calling ``is_legal``. Legality still
+governs what happens on release (FR10); that is a later issue's concern.
+
+This module never mutates the ``BoardState`` it is given, and -- matching
+``ui/input.py``'s posture -- tracks no drag state of its own: every drawing
+call takes an already-computed candidate ``Move`` (or ``None``), leaving
+"is the mouse currently down, and where" to a future ``app.py``. Depends on
 ``fruitbox.engine`` and ``fruitbox.config`` plus pygame; nothing else in the
 project may depend on ``fruitbox.ui`` (SPEC.md section 7).
 """
@@ -43,8 +60,10 @@ from ..config import (
     GRID_ORIGIN_Y_PX,
     GRID_ROWS,
     HUD_HEIGHT_PX,
+    TARGET_SUM,
 )
 from ..engine.board import BoardState
+from ..engine.moves import Move
 
 #: Fill for the entire surface.
 COLOR_BACKGROUND = (30, 30, 30)
@@ -66,6 +85,31 @@ COLOR_GRID_BORDER = (255, 255, 255)
 
 #: Width, in pixels, of the outer grid border line.
 _GRID_BORDER_WIDTH_PX = 1
+
+#: Selection fill/outline colour while the candidate sum is under TARGET_SUM
+#: ("keep dragging").
+COLOR_SELECTION_UNDER = (235, 200, 60)
+
+#: Selection fill/outline colour while the candidate sum is exactly
+#: TARGET_SUM (releasing now plays the move).
+COLOR_SELECTION_EXACT = (70, 205, 95)
+
+#: Selection fill/outline colour once the candidate sum exceeds TARGET_SUM
+#: ("overshot"). Deliberately close to COLOR_APPLE's red -- red is the
+#: natural "too much" signal, and the yellow/green/red triad reads clearly
+#: even though this shade resembles an apple's.
+COLOR_SELECTION_OVER = (215, 65, 65)
+
+#: Alpha (0-255) of the selection's translucent fill. Chosen so the tint is
+#: unmistakable against COLOR_BACKGROUND while still leaving apples and
+#: their digits legible underneath -- much lower and the tint washes out on
+#: the dark background, much higher and digit contrast starts to suffer.
+_SELECTION_FILL_ALPHA = 100
+
+#: Width, in pixels, of the selection's opaque outline. Thicker than
+#: _GRID_BORDER_WIDTH_PX so the selection reads as a distinct element rather
+#: than a second grid frame.
+_SELECTION_BORDER_WIDTH_PX = 3
 
 #: Apple circle radius as a fraction of the cell size.
 _APPLE_RADIUS_RATIO = 0.42
@@ -107,6 +151,32 @@ def grid_bounds(rows: int, cols: int) -> pygame.Rect:
     This is what the outer grid border is drawn around.
     """
     return cell_rect(0, 0).union(cell_rect(rows - 1, cols - 1))
+
+
+def selection_rect(move: Move) -> pygame.Rect:
+    """Return the pixel rectangle a candidate selection ``move`` spans.
+
+    The multi-cell analogue of :func:`cell_rect` -- the union of the two
+    corner cells' rectangles. Does no bounds checking against any board;
+    defined for any well-formed ``Move``.
+    """
+    return cell_rect(move.row_start, move.col_start).union(cell_rect(move.row_end, move.col_end))
+
+
+def selection_color(total: int) -> tuple[int, int, int]:
+    """Map a candidate selection's cell-value sum to its display colour.
+
+    Three-way, not binary legal/illegal: ``total < TARGET_SUM`` is
+    :data:`COLOR_SELECTION_UNDER` ("keep dragging"), ``total == TARGET_SUM``
+    is :data:`COLOR_SELECTION_EXACT`, and anything over is
+    :data:`COLOR_SELECTION_OVER` ("overshot"). Pure function -- takes the sum
+    itself rather than a precomputed legality flag.
+    """
+    if total < TARGET_SUM:
+        return COLOR_SELECTION_UNDER
+    if total == TARGET_SUM:
+        return COLOR_SELECTION_EXACT
+    return COLOR_SELECTION_OVER
 
 
 def window_size(rows: int = GRID_ROWS, cols: int = GRID_COLS) -> tuple[int, int]:
@@ -200,20 +270,54 @@ class Renderer:
         rect.centery = HUD_HEIGHT_PX // 2
         surface.blit(text, rect)
 
+    def draw_selection(self, surface: pygame.Surface, board: BoardState, move: Move) -> None:
+        """Draw a candidate selection: translucent fill + opaque outline (FR9).
+
+        Colour is picked from ``board.move_sum(move)`` via
+        :func:`selection_color` -- a three-way under/exact/over cue, never a
+        boolean legality check (``board.is_legal`` is not called here). No
+        numeric sum is rendered; the colour is the only feedback signal.
+
+        ``move`` is assumed to lie within ``board`` -- ``ui/input.py``'s
+        ``selection_from_drag`` already clamps into the grid before this is
+        ever called, so no defensive bounds check is done here; an
+        out-of-bounds ``move`` raises ``IndexError`` from ``move_sum``, the
+        same posture ``count_apples`` takes. Read-only with respect to
+        ``board``.
+        """
+        total = board.move_sum(move)
+        color = selection_color(total)
+        rect = selection_rect(move)
+
+        overlay = pygame.Surface(rect.size)
+        overlay.set_alpha(_SELECTION_FILL_ALPHA)
+        overlay.fill(color)
+        surface.blit(overlay, rect.topleft)
+
+        pygame.draw.rect(surface, color, rect, width=_SELECTION_BORDER_WIDTH_PX)
+
     def draw_frame(
         self,
         surface: pygame.Surface,
         board: BoardState,
         score: int,
         seconds_remaining: float,
+        selection: Move | None = None,
     ) -> None:
-        """Draw one complete frame: background, HUD, then the board.
+        """Draw one complete frame: background, HUD, board, then the selection.
 
         The single call a future ``app.py`` main loop makes per frame.
         ``apples_remaining`` is read from ``board`` itself rather than taken
         as a separate parameter, so it can never disagree with the board it
         describes.
+
+        ``selection`` is the current candidate ``Move`` for an in-progress
+        drag, or ``None`` when no drag is active -- this method holds no drag
+        state of its own; the caller computes ``selection`` fresh each frame
+        (e.g. via ``ui.input.selection_from_drag``) and passes it in.
         """
         surface.fill(COLOR_BACKGROUND)
         self.draw_hud(surface, score, seconds_remaining, board.apples_remaining)
         self.draw_board(surface, board)
+        if selection is not None:
+            self.draw_selection(surface, board, selection)

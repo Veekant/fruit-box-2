@@ -479,6 +479,127 @@ def test_count_apples_matches_an_independent_reference_on_random_boards(seed):
         assert state.count_apples(move) == reference
 
 
+# --- BoardState.move_sum() ---------------------------------------------------
+
+
+def test_move_sum_of_a_fully_occupied_rectangle():
+    assert _board().move_sum(SQUARE) == 10
+
+
+def test_move_sum_counts_empty_cells_as_zero():
+    # row 2 is 0+0+9+1; col 0 rows 1-3 is 4+0+6 -- both sum to 10 with an
+    # empty cell contributing nothing.
+    assert _board().move_sum(ROW_OVER_EMPTIES) == 10
+    assert _board().move_sum(COL_OVER_EMPTY) == 10
+
+
+def test_move_sum_below_target():
+    assert _board().move_sum(ILLEGAL) == 3
+
+
+def test_move_sum_above_target():
+    over = Move(row_start=0, col_start=0, row_end=0, col_end=3)
+    assert _board().move_sum(over) == 11
+
+
+def test_move_sum_of_an_all_empty_rectangle_is_zero():
+    all_empty = Move(row_start=2, col_start=0, row_end=2, col_end=1)
+    assert _board().move_sum(all_empty) == 0
+
+
+def test_move_sum_of_a_single_cell_is_its_value():
+    occupied = Move(row_start=0, col_start=0, row_end=0, col_end=0)
+    empty = Move(row_start=2, col_start=0, row_end=2, col_end=0)
+
+    assert _board().move_sum(occupied) == 1
+    assert _board().move_sum(empty) == 0
+
+
+def test_move_sum_of_the_whole_board_equals_the_grid_total():
+    state = _board()
+    whole_board = Move(row_start=0, col_start=0, row_end=3, col_end=3)
+
+    assert state.move_sum(whole_board) == _total(state)
+
+
+def test_move_sum_makes_no_legality_claim():
+    # ILLEGAL doesn't sum to TARGET_SUM -- move_sum reports the value anyway,
+    # without raising or otherwise reacting to the mismatch.
+    assert _board().move_sum(ILLEGAL) == 3
+    assert not _board().is_legal(ILLEGAL)
+
+
+def test_move_sum_does_not_mutate_the_board():
+    state = _board()
+    grid_before = [row[:] for row in state.grid]
+    apples_before = state.apples_remaining
+
+    state.move_sum(ROW_OVER_EMPTIES)
+
+    assert state.grid == grid_before
+    assert state.apples_remaining == apples_before
+
+
+def test_move_sum_reflects_cells_cleared_by_an_earlier_move():
+    state = _board()
+    state.apply_move(SQUARE)  # zeroes rows 0-1, cols 0-1
+
+    assert state.move_sum(SQUARE) == 0
+
+    # rows 0-1, cols 0-2 was 1+2+3 + 4+3+2 = 15 originally; after SQUARE
+    # clears cols 0-1, only the col-2 apples (3, 2) remain.
+    overlapping = Move(row_start=0, col_start=0, row_end=1, col_end=2)
+    assert state.move_sum(overlapping) == 5
+
+
+def test_move_sum_raises_on_a_rectangle_extending_past_the_board():
+    state = _board()
+
+    with pytest.raises(IndexError):
+        state.move_sum(Move(row_start=2, col_start=0, row_end=2, col_end=9))
+
+
+def test_move_sum_raises_on_a_rectangle_entirely_off_the_board():
+    state = _board()
+
+    with pytest.raises(IndexError):
+        state.move_sum(Move(row_start=10, col_start=10, row_end=11, col_end=11))
+
+
+@pytest.mark.parametrize("seed", [0, 1, 42, 99, 1234])
+def test_move_sum_matches_an_independent_reference_on_random_boards(seed):
+    state = BoardState.generate_board(seed=seed)
+
+    candidates = [
+        Move(row_start=0, col_start=0, row_end=0, col_end=0),
+        Move(row_start=0, col_start=0, row_end=2, col_end=2),
+        Move(row_start=3, col_start=4, row_end=5, col_end=9),
+        Move(row_start=0, col_start=0, row_end=state.rows - 1, col_end=state.cols - 1),
+    ]
+
+    for move in candidates:
+        reference = sum(state.grid[row][col] for row, col in move.cells())
+        assert state.move_sum(move) == reference
+
+
+@pytest.mark.parametrize("seed", [0, 1, 42, 99, 1234])
+def test_is_legal_agrees_with_move_sum_against_the_target(seed):
+    # Regression guard for the is_legal -> move_sum delegation: two
+    # independent-looking calls must never disagree on a random board.
+    state = BoardState.generate_board(seed=seed)
+
+    candidates = [
+        Move(row_start=0, col_start=0, row_end=0, col_end=0),
+        Move(row_start=0, col_start=0, row_end=2, col_end=2),
+        Move(row_start=1, col_start=1, row_end=4, col_end=6),
+        Move(row_start=3, col_start=4, row_end=5, col_end=9),
+        Move(row_start=0, col_start=0, row_end=state.rows - 1, col_end=state.cols - 1),
+    ]
+
+    for move in candidates:
+        assert state.is_legal(move) == (state.move_sum(move) == TARGET_SUM)
+
+
 # --- BoardState.verify() ---------------------------------------------------
 
 

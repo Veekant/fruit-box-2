@@ -7,7 +7,9 @@ The single source of truth for the board is :class:`BoardState.grid`. There is
 deliberately **no separate occupancy mask** (SPEC.md section 2, section 8): a cell
 holding 0 is empty (removed, or never occupied) and a cell holding 1-9 is
 occupied at that value. Rectangle sums therefore work directly over the current
-grid values, with empty cells contributing 0 for free.
+grid values, with empty cells contributing 0 for free -- computed once by
+:meth:`BoardState.move_sum` and shared by :meth:`BoardState.is_legal` and any
+UI live-feedback caller (SPEC.md FR9) rather than reimplemented per caller.
 """
 
 from __future__ import annotations
@@ -184,12 +186,40 @@ class BoardState:
         Returns:
             ``True`` if the move may be played on this board, else ``False``.
         """
-        # Bounds first, and return early on failure: the sum below indexes into
+        # Bounds first, and return early on failure: move_sum indexes into
         # the grid, so a rectangle running off the board must never reach it.
         if move.row_end >= self.rows or move.col_end >= self.cols:
             return False
 
-        return sum(self.grid[row][col] for row, col in move.cells()) == TARGET_SUM
+        return self.move_sum(move) == TARGET_SUM
+
+    def move_sum(self, move: Move) -> int:
+        """Return the sum of ``move``'s rectangle's current cell values.
+
+        Empty cells hold 0 and contribute nothing (SPEC.md section 2), so a
+        rectangle spanning cleared cells sums only its occupied portion. This
+        is the number FR9's live drag feedback is built from, and the value
+        :meth:`is_legal` compares against ``TARGET_SUM`` -- the two share this
+        one implementation rather than each summing independently.
+
+        Legality is irrelevant here and deliberately not checked: this sums
+        any rectangle, whether or not it happens to equal ``TARGET_SUM``.
+
+        The rectangle is assumed to lie within the grid, the same posture
+        :meth:`is_legal` and :meth:`count_apples` take. An out-of-bounds
+        rectangle raises ``IndexError`` from the grid lookup rather than
+        silently summing its in-bounds portion; callers wanting a bounds
+        *test* should use :meth:`is_legal`.
+
+        Args:
+            move: The rectangle to sum over. Neither it nor this board is
+                mutated.
+
+        Returns:
+            The sum of the rectangle's current cell values; 0 if it is
+            entirely empty.
+        """
+        return sum(self.grid[row][col] for row, col in move.cells())
 
     def count_apples(self, move: Move) -> int:
         """Return how many cells in ``move``'s rectangle are currently occupied.

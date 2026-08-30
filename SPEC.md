@@ -91,7 +91,7 @@ To keep scope controlled, the following are **out of scope** for this project un
 ### 5.2 Pygame UI
 - FR7: Render the grid: each occupied cell as a colored shape (e.g. a circle) with its digit centered on it; each empty cell left blank (nothing drawn there). An empty cell is visually distinct from an occupied one simply by having no shape drawn in it — no separate empty-cell fill or lines between individual cells are required. A thin border around the grid's outer boundary as a whole is drawn, to frame the play area.
 - FR8: Support mouse click-drag to define a rectangular selection; the rectangle should snap to whole cells only.
-- FR9: While dragging, display the live sum of the current selection (empty cells contribute 0, matching §2) and a visual cue (e.g., color) indicating whether the current selection is legal (sums to exactly 10) or not.
+- FR9: While dragging, display a three-way visual cue (e.g., color) derived from the live sum of the current selection (empty cells contribute 0, matching §2): one state while the sum is under 10 ("keep dragging"), one exactly at 10 (legal), and one over 10 (overshot). No numeric sum needs to be rendered — the three-way cue alone is strictly more informative than a binary legal/illegal indicator, since it tells the player which direction to adjust.
 - FR10: On mouse release, if the selection is legal, apply the move and update the UI (removal, score). If illegal, discard the selection with no state change.
 - FR11: Display running score and remaining time; on timer expiration or terminal board state, show a game-over/summary screen with final score.
 - FR12: Provide a way to start a new game (new random board) and to reset the current board to its initial state.
@@ -294,7 +294,7 @@ All engine and solver tests should run headlessly with `pytest`, no pygame/displ
 
 - Grid rendered with no lines between individual cells (a thin border frames the grid's outer boundary as a whole) — each occupied cell shown as a colored circle with its digit centered; empty cells are left blank (nothing drawn), which is what makes them visually distinct from occupied cells.
 - Click-and-drag defines a selection rectangle that snaps to cell boundaries (no partial-cell selection).
-- Real-time feedback during drag: show the running sum of the selection (empty cells contribute 0, and a legal selection may freely span them) and a distinct color/border state for "sums to exactly 10" (legal) vs. anything else (illegal) — this is the core game-feel requirement and should not be skipped.
+- Real-time feedback during drag: a distinct fill/border color state for each of three cases, based on the selection's running sum (empty cells contribute 0, and a legal selection may freely span them) — under 10 ("keep dragging"), exactly 10 (legal), over 10 (overshot) — this is the core game-feel requirement and should not be skipped. The numeric sum itself is not displayed; the three-way color cue is the sole feedback channel and is strictly more informative than a binary legal/illegal indicator, since it also tells the player which direction to adjust.
 - On release: legal selections clear immediately; illegal selections simply vanish with no penalty (matches original game feel — no penalty for a "bad" attempt).
 - HUD: current score, session high score, time remaining, apples remaining count.
 - Game-over screen: final score, apples cleared / total, session high score, option to restart.
