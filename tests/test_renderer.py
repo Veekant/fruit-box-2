@@ -79,15 +79,10 @@ def test_cell_rect_centers_are_unique_and_ordered():
         assert centers[(0, col)][0] < centers[(0, col + 1)][0]
 
 
-def test_cell_rect_center_inverts_to_same_cell():
-    for row in range(GRID_ROWS):
-        for col in range(GRID_COLS):
-            cx, cy = cell_rect(row, col).center
-
-            recovered_row = (cy - GRID_ORIGIN_Y_PX) // CELL_SIZE_PX
-            recovered_col = (cx - GRID_ORIGIN_X_PX) // CELL_SIZE_PX
-
-            assert (recovered_row, recovered_col) == (row, col)
+# The cell_rect <-> pixel-to-cell round trip (formerly hand-rolled here) is
+# now tested against the real inverse, fruitbox.ui.input.cell_at, in
+# tests/test_input.py -- asserting the actual consistency contract rather
+# than a copy of the formula it's meant to guard.
 
 
 # --- grid_bounds ---------------------------------------------------------------
