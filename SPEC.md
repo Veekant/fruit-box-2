@@ -89,7 +89,7 @@ To keep scope controlled, the following are **out of scope** for this project un
 - FR6: Support loading a board from a fixed layout (e.g., list of lists / file) for testing and reproducibility.
 
 ### 5.2 Pygame UI
-- FR7: Render the grid with current values and empty cells visually distinct.
+- FR7: Render the grid: each occupied cell as a colored shape (e.g. a circle) with its digit centered on it; each empty cell left blank (nothing drawn there). An empty cell is visually distinct from an occupied one simply by having no shape drawn in it — no separate empty-cell fill or lines between individual cells are required. A thin border around the grid's outer boundary as a whole is drawn, to frame the play area.
 - FR8: Support mouse click-drag to define a rectangular selection; the rectangle should snap to whole cells only.
 - FR9: While dragging, display the live sum of the current selection (empty cells contribute 0, matching §2) and a visual cue (e.g., color) indicating whether the current selection is legal (sums to exactly 10) or not.
 - FR10: On mouse release, if the selection is legal, apply the move and update the UI (removal, score). If illegal, discard the selection with no state change.
@@ -292,7 +292,7 @@ All engine and solver tests should run headlessly with `pytest`, no pygame/displ
 
 ## 11. User Interface Requirements
 
-- Grid rendered with clear cell boundaries, digit shown centered in each occupied cell; empty cells visually blank/muted.
+- Grid rendered with no lines between individual cells (a thin border frames the grid's outer boundary as a whole) — each occupied cell shown as a colored circle with its digit centered; empty cells are left blank (nothing drawn), which is what makes them visually distinct from occupied cells.
 - Click-and-drag defines a selection rectangle that snaps to cell boundaries (no partial-cell selection).
 - Real-time feedback during drag: show the running sum of the selection (empty cells contribute 0, and a legal selection may freely span them) and a distinct color/border state for "sums to exactly 10" (legal) vs. anything else (illegal) — this is the core game-feel requirement and should not be skipped.
 - On release: legal selections clear immediately; illegal selections simply vanish with no penalty (matches original game feel — no penalty for a "bad" attempt).
