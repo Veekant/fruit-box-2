@@ -36,7 +36,7 @@ tests/          # headless pytest, no display required
 - **Four distinct solver concerns, kept in separate modules** (SPEC.md §9): enumerating legal moves (`solver/move_scanner.py`, prefix-sum based), single-step move ranking (`solver/strategies.py`, pluggable `StrategyFn`), bounded lookahead (`solver/search.py`, post-MVP stub), and best-effort full-clear analysis (`solver/analyzer.py`, explicitly heuristic — this is NP-hard in general, not solved exactly).
 - **`attempt_full_clear` never claims a proof of unsolvability.** `found_full_clear: False` means "search budget exhausted," not "impossible." Always report `best_apples_cleared` regardless of whether a full clear was found.
 - **Board generation must guarantee total sum ≡ 0 (mod 10)** via the two-cell adjustment algorithm in SPEC.md §5.1 FR1 — this is a necessary precondition for full clearability and must stay seedable for reproducible tests/benchmarks.
-- Strategy functions share one signature (`StrategyFn = Callable[[BoardState, list[Move]], list[RankedMove]]`) so they're swappable without touching call sites (NFR7).
+- Strategy functions share one signature (`StrategyFn = Callable[[BoardState, Move], float]` — scores a single move against a single state) so they're swappable without touching call sites (NFR7). `rank_moves(state, moves, strategy, count=None)` is the one place that applies a strategy across a move list, builds `RankedMove`s (attaching the true `apples_removed` via `BoardState.count_apples`), sorts by score descending, and optionally truncates to the top `count`.
 
 ## Testing approach (from SPEC.md §10)
 

@@ -100,7 +100,7 @@ To keep scope controlled, the following are **out of scope** for this project un
 
 ### 5.3 Solver/Analyzer
 - FR14: `find_legal_moves(state) -> list[Move]` — enumerate all currently legal rectangles. Must be correct and complete (see §9.1 for algorithmic approach).
-- FR15: `rank_moves(state, moves) -> list[(Move, score)]` — apply a pluggable scoring/heuristic function to order legal moves from "best" to "worst" per current strategy. Must support swapping strategies without changing the interface (see §9 Strategy design).
+- FR15: `rank_moves(state, moves, strategy, count=None) -> list[RankedMove]` — apply a pluggable per-move scoring/heuristic function to order legal moves from "best" to "worst" per the current strategy, optionally truncated to the top `count` results (all of them when `count` is omitted). Must support swapping strategies without changing the interface (see §9 Strategy design). The moves passed in are assumed to be legal already — they come from FR14 — and ranking does not re-validate them.
 - FR16: `attempt_full_clear(state, budget) -> ClearResult` — best-effort determination of whether the board is fully solvable (see §9.4). "Solvable" means strictly a full clear of all cells; the function must not claim a proof of unsolvability, only "no full clear found within budget." `ClearResult` must also report the best (maximum) apples-cleared count found during the search, even when a full clear isn't found, since that's a separately useful metric for boards that aren't fully solvable.
 - FR17: `play_greedy(state) -> (list[Move], apples_cleared, moves_used)` — repeatedly apply the top-ranked move from `rank_moves` until no legal moves remain; return the move sequence, apples cleared, and total move count. Move count is the primary efficiency metric the solver optimizes toward (see §9), not elapsed time.
 - FR18: `play_lookahead(state, depth) -> (list[Move], apples_cleared, moves_used)` — as FR17 but choosing moves via limited-depth search rather than a single-step heuristic, aiming to minimize moves used to reach a full (or maximal) clear (stretch goal beyond MVP greedy solver, but interface should anticipate it — see §9.3).
@@ -207,9 +207,11 @@ class RankedMove:
     score: float          # heuristic-dependent, higher = better
     apples_removed: int
 
-# A strategy is just a function:
-StrategyFn = Callable[[BoardState, list[Move]], list[RankedMove]]
+# A strategy is just a function that scores ONE move against ONE state:
+StrategyFn = Callable[[BoardState, Move], float]
 ```
+
+**Strategy shape (resolved)**: a `StrategyFn` scores a *single* move, not a whole list. Ordering, `RankedMove` construction, and truncation belong to `rank_moves` — not to each strategy — so a new heuristic is a one-line scoring function with no sorting boilerplate to get wrong, and every strategy inherits identical ordering and tie-breaking behavior for free. `rank_moves(state, moves, strategy, count=None)` calls `strategy` once per move, wraps each result in a `RankedMove` (attaching the apples that move would actually remove, via `BoardState.count_apples`), sorts by `score` descending, and returns the top `count` — all of them when `count` is `None`. Ties keep the input order, which for moves taken straight from `find_legal_moves` is deterministic (§9.1). Note that `count` cannot avoid any *scoring* work: a black-box per-move scorer must be called on every move before the best one is knowable. It only avoids fully ordering results the caller is going to discard, which matters most for the single-move hint path (FR13).
 
 Score representation: rectangle-sum queries use a 2D prefix-sum array (see §9.1) built directly from `grid`'s current values (empty cells are already 0, so they need no special handling), rebuilt or incrementally updated after each move — this is the key data structure enabling fast legal-move enumeration.
 
@@ -231,14 +233,14 @@ This is a well-defined, tractable subproblem: enumerate every axis-aligned recta
 
 ### 9.2 Ranking Individual Moves (`rank_moves` / strategies)
 
-Given the current state and the full legal-move list, assign each move a score for a **single step** — no lookahead. This is where "which move is best right now" heuristics live. The solver's overall objective is minimizing the **number of moves** used to reach a full (or maximal) clear — never elapsed time (see §9). Implement as swappable strategy functions, e.g.:
+Given the current state and the full legal-move list, assign each move a score for a **single step** — no lookahead. This is where "which move is best right now" heuristics live. The solver's overall objective is minimizing the **number of moves** used to reach a full (or maximal) clear — never elapsed time (see §9). A strategy is a plain function scoring one move against one state (`StrategyFn`, §8); `rank_moves` owns applying it across the legal-move list, sorting, and truncating. Moves handed to `rank_moves` are assumed legal — it is fed the output of `find_legal_moves` (§9.1) — so neither it nor any strategy re-checks bounds or sums. Implement as swappable scoring functions, e.g.:
 
-- `strategy_max_apples`: prefer moves that clear the most apples. This is a reasonable single-step proxy for the move-count objective (fewer, larger moves tend toward fewer total moves), though it is not guaranteed optimal — a greedy large move can sometimes fragment the board and cost more moves overall than a smaller one would have.
-- `strategy_min_apples`: prefer smallest/cheapest moves (preserves optionality, sometimes better for full-clear rate, at the cost of using more moves along the way).
+- `strategy_max_apples`: prefer moves that clear the most apples — it scores a move by the number of still-occupied cells its rectangle covers, **not** by the rectangle's area (a rectangle spanning already-cleared cells is worth only the apples it really removes). This is a reasonable single-step proxy for the move-count objective (fewer, larger moves tend toward fewer total moves), though it is not guaranteed optimal — a greedy large move can sometimes fragment the board and cost more moves overall than a smaller one would have.
+- `strategy_min_apples`: prefer smallest/cheapest moves — the negation of `strategy_max_apples`'s score, so "higher is better" still holds (preserves optionality, sometimes better for full-clear rate, at the cost of using more moves along the way).
 - `strategy_edge_preference`: prefer moves along grid edges/corners (reduces future dead zones — an original-Fruit-Box community heuristic).
-- `strategy_random`: baseline for benchmarking (a sanity floor).
+- `strategy_random`: baseline for benchmarking (a sanity floor) — ignores both of its arguments and returns a random float, so ranking produces a uniformly random order.
 
-MVP only needs 1–2 of these implemented; the important design requirement is that they share a common function signature (`StrategyFn`) so they're interchangeable and testable independently, and so a benchmark script can compare them head-to-head (average moves used and clear rate over N random boards — see §10).
+The MVP implements `strategy_max_apples`, `strategy_min_apples`, and `strategy_random`; the important design requirement is that they share a common function signature (`StrategyFn`) so they're interchangeable and testable independently, and so a benchmark script can compare them head-to-head (average moves used and clear rate over N random boards — see §10). A name → function registry (`STRATEGIES`) lets the CLI and benchmark script select one by string without importing each individually.
 
 ### 9.3 Looking Ahead at Future Board States (`play_lookahead`, `search.py`)
 
@@ -276,7 +278,7 @@ All engine and solver tests should run headlessly with `pytest`, no pygame/displ
   - `apply_move` correctly zeroes out only the cells that were nonzero before the move, updates score by that count (not the rectangle's full area), and leaves already-empty cells and cells outside the rectangle alone.
   - Terminal-state detection (no legal moves left) on a constructed "stuck" board.
 - **Enumeration tests**: on small fixed boards, assert `find_legal_moves` returns the exact expected set of rectangles (order-independent comparison). Include an edge case with zero legal moves, one with overlapping candidate rectangles, and one where a legal rectangle spans empty cells.
-- **Strategy tests**: given a fixed state and legal move list, assert a given strategy orders moves as expected (e.g., `strategy_max_apples` puts the largest-area legal move first).
+- **Strategy tests**: given a fixed state and legal move list, assert a given strategy orders moves as expected (e.g., `strategy_max_apples` puts the move removing the most apples first — including a case where that is *not* the largest-area rectangle, because a larger rectangle spans already-cleared cells).
 - **Analyzer tests**: on a small hand-crafted fully-clearable board, assert `attempt_full_clear`/`play_greedy` finds a full clear within a small budget; on a hand-crafted unclearable board, assert it correctly reports no full clear found (and does not falsely claim a proof of unsolvability beyond what's documented).
 - **Property-based / randomized checks** (optional but recommended, plain `random` + seeds is enough — no need for `hypothesis` unless already comfortable with it): generate N random seeded boards, run `find_legal_moves`, and assert every returned move independently re-validates as legal via the low-level legality checker (cross-check two independent code paths against each other).
 - **UI**: manual/smoke testing is acceptable for pygame rendering itself (visual correctness is hard to unit test meaningfully); however, the *translation* of mouse-drag pixel coordinates into a grid rectangle (`input.py`) should be a pure function and unit-tested with synthetic coordinates.

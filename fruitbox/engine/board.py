@@ -191,12 +191,43 @@ class BoardState:
 
         return sum(self.grid[row][col] for row, col in move.cells()) == TARGET_SUM
 
+    def count_apples(self, move: Move) -> int:
+        """Return how many cells in ``move``'s rectangle are currently occupied.
+
+        The non-destructive counterpart to :meth:`apply_move`'s return value:
+        ``count_apples(move)`` is exactly what ``apply_move(move)`` would report,
+        without touching the grid. Counts *apples*, not the rectangle's area --
+        cells that are already empty contribute nothing, so a rectangle spanning
+        cleared cells is worth only the apples it really covers.
+
+        Legality is irrelevant here and deliberately not checked: this counts
+        occupied cells in any rectangle, whether or not it sums to the target.
+        Solver ranking (SPEC.md section 9.2) relies on that -- it is handed moves
+        already known to be legal and must not pay to re-verify them.
+
+        The rectangle is assumed to lie within the grid, the same posture
+        :meth:`is_legal` takes on its cell-sum path. An out-of-bounds rectangle
+        raises ``IndexError`` from the grid lookup rather than silently returning
+        a count of its in-bounds portion; callers wanting a bounds *test* should
+        use :meth:`is_legal`.
+
+        Args:
+            move: The rectangle to count over. Neither it nor this board is
+                mutated.
+
+        Returns:
+            The number of nonzero cells in the rectangle; 0 if it is entirely
+            empty.
+        """
+        return sum(1 for row, col in move.cells() if self.grid[row][col] != 0)
+
     def apply_move(self, move: Move) -> int:
         """Play ``move``: zero its still-occupied cells and report how many.
 
         Legality is checked here via :meth:`is_legal`, so nothing is mutated
         unless the move is legal -- a rejected move leaves the grid exactly as
-        it was.
+        it was. See :meth:`count_apples` for the non-destructive form of this
+        same question.
 
         ``apples_remaining`` is decremented by the same count that is returned,
         so it stays in step with the grid without ever rescanning it.
