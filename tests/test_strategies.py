@@ -550,7 +550,8 @@ def test_rank_moves_and_find_legal_moves_agree_on_a_fully_cleared_board():
 def test_greedy_composition_smoke_test():
     # rank_moves(count=1) composes cleanly with find_legal_moves and
     # apply_move to drive a board to a terminal state -- a light guard that
-    # the pieces fit together; the real play_greedy is a later issue (FR17).
+    # the pieces fit together at the strategies level. The real play_greedy
+    # (FR17) lives in fruitbox.solver.analyzer and has its own test suite.
     state = BoardState.generate_board(rows=5, cols=5, seed=3)
 
     steps = 0
