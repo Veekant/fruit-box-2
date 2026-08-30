@@ -146,7 +146,8 @@ fruitbox/
 │   ├── renderer.py       # Drawing grid, cells, selection rectangle, HUD
 │   └── input.py          # Mouse drag -> rectangle translation
 │
-├── cli.py                # Entry point: `python -m fruitbox.cli play|solve|benchmark`
+├── cli.py                # Entry point: `python -m fruitbox.cli play|solve|benchmark` (its `benchmark` subcommand delegates to benchmark.py, never duplicates it — NFR1a)
+├── benchmark.py          # Strategy comparison harness: `python -m fruitbox.benchmark`
 ├── config.py             # Grid dimensions, timer length, value range, constants
 │
 tests/
@@ -285,7 +286,7 @@ All engine and solver tests should run headlessly with `pytest`, no pygame/displ
 - **Analyzer tests**: on a small hand-crafted fully-clearable board, assert `attempt_full_clear`/`play_greedy` finds a full clear within a small budget; on a hand-crafted unclearable board, assert it correctly reports no full clear found (and does not falsely claim a proof of unsolvability beyond what's documented).
 - **Property-based / randomized checks** (optional but recommended, plain `random` + seeds is enough — no need for `hypothesis` unless already comfortable with it): generate N random seeded boards, run `find_legal_moves`, and assert every returned move independently re-validates as legal via the low-level legality checker (cross-check two independent code paths against each other).
 - **UI**: manual/smoke testing is acceptable for pygame rendering itself (visual correctness is hard to unit test meaningfully); however, the *translation* of mouse-drag pixel coordinates into a grid rectangle (`input.py`) should be a pure function and unit-tested with synthetic coordinates.
-- **Benchmark script** (not a pass/fail test, but part of the testing/validation story): run each strategy over e.g. 100 random seeded boards and report average apples cleared and average moves used — useful both for validating the solver behaves sensibly and for demonstrating engineering rigor.
+- **Benchmark script** (not a pass/fail test, but part of the testing/validation story): run each strategy over e.g. 100 freshly-generated, unseeded random boards — the same board population for every strategy within one run, for a fair comparison, but not reproducible run-to-run — and report min/max/mean apples cleared and moves used — useful both for validating the solver behaves sensibly and for demonstrating engineering rigor.
 
 ---
 
