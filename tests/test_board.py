@@ -359,6 +359,126 @@ def test_replaying_an_already_cleared_rectangle_is_rejected():
     assert state.grid == grid_after_first
 
 
+# --- BoardState.count_apples() ----------------------------------------------
+
+
+def test_count_apples_of_a_fully_occupied_rectangle_equals_its_area():
+    assert _board().count_apples(SQUARE) == 4
+
+
+def test_count_apples_counts_apples_not_area_across_a_row_of_empties():
+    # row 2 is 0+0+9+1: a 4-cell rectangle holding only 2 apples.
+    assert _board().count_apples(ROW_OVER_EMPTIES) == 2
+
+
+def test_count_apples_counts_apples_not_area_across_a_column_of_empties():
+    # col 0, rows 1-3: 4, 0, 6 -- a 3-cell rectangle holding only 2 apples.
+    assert _board().count_apples(COL_OVER_EMPTY) == 2
+
+
+def test_count_apples_of_an_all_empty_rectangle_is_zero():
+    # row 2, cols 0-1: both cells are the hand-authored empties.
+    assert _board().count_apples(Move(row_start=2, col_start=0, row_end=2, col_end=1)) == 0
+
+
+def test_count_apples_of_a_single_occupied_cell_is_one():
+    assert _board().count_apples(Move(row_start=0, col_start=0, row_end=0, col_end=0)) == 1
+
+
+def test_count_apples_of_a_single_empty_cell_is_zero():
+    assert _board().count_apples(Move(row_start=2, col_start=0, row_end=2, col_end=0)) == 0
+
+
+def test_count_apples_of_the_whole_board_equals_apples_remaining():
+    state = _board()
+
+    whole_board = Move(row_start=0, col_start=0, row_end=3, col_end=3)
+
+    assert state.count_apples(whole_board) == LAYOUT_APPLES == state.apples_remaining
+
+
+def test_count_apples_does_not_check_legality():
+    # ILLEGAL sums to 3, not TARGET_SUM -- count_apples doesn't care.
+    assert not _board().is_legal(ILLEGAL)
+    assert _board().count_apples(ILLEGAL) == 2  # cells hold 1 and 2, both occupied
+
+
+def test_count_apples_agrees_with_apply_moves_return_value():
+    for move in (SQUARE, ROW_OVER_EMPTIES, COL_OVER_EMPTY):
+        counted = _board().count_apples(move)
+        applied = _board().apply_move(move)
+
+        assert counted == applied
+
+
+def test_count_apples_reflects_cells_cleared_by_an_earlier_move():
+    state = _board()
+    state.apply_move(SQUARE)  # zeroes rows 0-1, cols 0-1
+
+    # Re-counting the same rectangle now finds nothing left to clear.
+    assert state.count_apples(SQUARE) == 0
+    # A rectangle overlapping the cleared region counts only what survives:
+    # rows 0-1, cols 0-2 was 1+2+3 + 4+3+2 = 15 originally (6 apples); after
+    # SQUARE clears cols 0-1, only the col-2 apples (3, 2) remain.
+    overlapping = Move(row_start=0, col_start=0, row_end=1, col_end=2)
+    assert state.count_apples(overlapping) == 2
+
+
+def test_count_apples_does_not_mutate_the_board():
+    state = _board()
+    grid_before = [row[:] for row in state.grid]
+    apples_before = state.apples_remaining
+
+    state.count_apples(ROW_OVER_EMPTIES)
+
+    assert state.grid == grid_before
+    assert state.apples_remaining == apples_before
+
+
+def test_count_apples_raises_on_a_rectangle_extending_past_the_board():
+    state = _board()
+
+    with pytest.raises(IndexError):
+        state.count_apples(Move(row_start=2, col_start=0, row_end=2, col_end=9))
+
+
+def test_count_apples_raises_on_a_rectangle_entirely_off_the_board():
+    state = _board()
+
+    with pytest.raises(IndexError):
+        state.count_apples(Move(row_start=10, col_start=10, row_end=11, col_end=11))
+
+
+@pytest.mark.parametrize("seed", [0, 1, 42, 99, 1234])
+def test_count_apples_matches_an_independent_reference_on_random_boards(seed):
+    state = BoardState.generate_board(seed=seed)
+
+    candidates = [
+        Move(row_start=0, col_start=0, row_end=0, col_end=0),
+        Move(row_start=0, col_start=0, row_end=2, col_end=2),
+        Move(row_start=3, col_start=4, row_end=5, col_end=9),
+        Move(row_start=0, col_start=0, row_end=state.rows - 1, col_end=state.cols - 1),
+    ]
+
+    for move in candidates:
+        reference = sum(
+            1 for row, col in move.cells() if state.grid[row][col] != 0
+        )
+        assert state.count_apples(move) == reference
+
+    # Clear a couple of cells directly (no need for a legal move here -- this
+    # is only checking that count_apples keeps tracking the grid correctly
+    # once some cells go empty) and re-check the same reference agrees.
+    state.grid[0][0] = 0
+    state.grid[1][0] = 0
+
+    for move in candidates:
+        reference = sum(
+            1 for row, col in move.cells() if state.grid[row][col] != 0
+        )
+        assert state.count_apples(move) == reference
+
+
 # --- BoardState.verify() ---------------------------------------------------
 
 
