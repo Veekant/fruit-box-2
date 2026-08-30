@@ -20,9 +20,11 @@ in ``fruitbox.config`` -- this module only holds colours and look-and-feel
 proportions, and the arithmetic (:func:`cell_rect`, :func:`grid_bounds`,
 :func:`window_size`) that combines the config constants with a cell index or
 grid size into actual pixel geometry. That arithmetic is the single place
-every draw call (and, later, the reverse pixel-to-cell lookup in
-``ui/input.py``) gets its numbers from, so a config tweak can't silently
-desync one call site from another.
+every draw call gets its numbers from, so a config tweak can't silently
+desync one call site from another. The reverse pixel-to-cell lookup lives in
+``ui/input.py`` -- derived independently from the same config constants
+rather than importing from this module, so ``ui/input.py`` stays
+pygame-free.
 
 This module never mutates the ``BoardState`` it is given. Depends on
 ``fruitbox.engine`` and ``fruitbox.config`` plus pygame; nothing else in the
@@ -84,9 +86,10 @@ def cell_rect(row: int, col: int) -> pygame.Rect:
     ``(r, c)`` is exactly the left edge of ``(r, c + 1)``.
 
     This is the single place cell-index-to-pixel arithmetic lives; every
-    draw call in :class:`Renderer` goes through it, and a future reverse
-    pixel-to-cell lookup (``ui/input.py``) should stay consistent with it
-    rather than recomputing the same formula separately.
+    draw call in :class:`Renderer` goes through it. The reverse pixel-to-cell
+    lookup, ``fruitbox.ui.input.cell_at``, is derived independently from the
+    same ``fruitbox.config`` constants (not by importing this function) --
+    consistency between the two is enforced by tests, not a shared import.
     """
     return pygame.Rect(
         GRID_ORIGIN_X_PX + col * CELL_SIZE_PX,
