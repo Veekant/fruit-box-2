@@ -40,3 +40,12 @@ def test_config_target_sum():
     from fruitbox import config
 
     assert config.TARGET_SUM == 10
+
+
+def test_config_key_labels():
+    from fruitbox import config
+
+    assert config.RESTART_KEY_LABEL != config.NEW_GAME_KEY_LABEL
+    for label in (config.RESTART_KEY_LABEL, config.NEW_GAME_KEY_LABEL):
+        assert len(label) == 1
+        assert label.isupper()

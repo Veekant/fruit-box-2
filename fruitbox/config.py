@@ -48,3 +48,15 @@ GRID_ORIGIN_X_PX = GRID_MARGIN_PX
 
 #: Y pixel coordinate of cell (0, 0)'s top-left corner.
 GRID_ORIGIN_Y_PX = HUD_HEIGHT_PX + GRID_MARGIN_PX
+
+#: Key label for "replay this board" (FR12), shown on the game-over screen.
+#: Destined to bind to ``pygame.K_r`` once a main loop exists (issue #19);
+#: kept here rather than in ``ui/renderer.py`` or ``ui/app.py`` so both the
+#: prompt text and the eventual key binding can import the same constant
+#: without an inverted or cyclic dependency between those two modules.
+RESTART_KEY_LABEL = "R"
+
+#: Key label for "start a new random board" (FR12), shown on the game-over
+#: screen. Destined to bind to ``pygame.K_n`` once a main loop exists (issue
+#: #19); see :data:`RESTART_KEY_LABEL` for why this lives in ``config.py``.
+NEW_GAME_KEY_LABEL = "N"

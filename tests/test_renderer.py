@@ -1,22 +1,21 @@
-"""Tests for the pygame drawing scaffold (SPEC.md FR7, FR9, section 11).
+"""Tests for the pygame drawing scaffold (SPEC.md FR7, FR9, FR11, section 11).
 
 Covers the pure geometry (``cell_rect``, ``grid_bounds``, ``window_size``,
 ``selection_rect``), the pure legality-cue mapping (``selection_color``),
-and string formatting (``format_hud``) pieces of ``fruitbox.ui.renderer`` --
-these involve no rendering or pixel inspection, so they're unit-tested
-directly, per SPEC.md section 10's carve-out for pure UI translation
-functions.
+and string formatting (``format_hud``, ``format_game_over``) pieces of
+``fruitbox.ui.renderer`` -- these involve no rendering or pixel inspection,
+so they're unit-tested directly, per SPEC.md section 10's carve-out for pure
+UI translation functions.
 
 Deliberately does NOT assert on drawn pixel colors, digit glyph presence, or
 HUD text presence: the actual visual look (apple radius, colors, font
 choice) is confirmed by eye and tuned as needed, not pinned by brittle
 pixel-color assertions that would break on every cosmetic tweak. The
 exceptions are non-visual smoke tests confirming drawing methods run without
-raising, and one test that a selection's fill/outline mark *something* at
-the right location without asserting *which* color -- these catch
-API-level breakage (font init, argument mismatches, bad alpha-surface
-handling, off-by-one on non-default board sizes) that eyeballing a window
-wouldn't catch as quickly.
+raising, and tests that something is drawn/marked at the right location
+without asserting *which* color -- these catch API-level breakage (font
+init, argument mismatches, bad alpha-surface handling, off-by-one on
+non-default board sizes) that eyeballing a window wouldn't catch as quickly.
 
 All headless -- pygame.Rect/Surface/font all work with no display and no
 ``pygame.display.set_mode()``.
@@ -36,6 +35,8 @@ from fruitbox.config import (
     GRID_ORIGIN_Y_PX,
     GRID_ROWS,
     HUD_HEIGHT_PX,
+    NEW_GAME_KEY_LABEL,
+    RESTART_KEY_LABEL,
     TARGET_SUM,
 )
 from fruitbox.engine.board import BoardState
@@ -45,8 +46,11 @@ from fruitbox.ui.renderer import (
     COLOR_SELECTION_EXACT,
     COLOR_SELECTION_OVER,
     COLOR_SELECTION_UNDER,
+    NEW_GAME_PROMPT,
+    RESTART_PROMPT,
     Renderer,
     cell_rect,
+    format_game_over,
     format_hud,
     grid_bounds,
     selection_color,
@@ -363,3 +367,151 @@ def test_draw_frame_selection_defaults_to_none():
     surface = pygame.Surface(window_size(3, 4))
     board = _small_board()
     renderer.draw_frame(surface, board, 0, 100)
+
+
+# --- format_game_over -------------------------------------------------------------
+
+
+def test_format_game_over_exact_lines():
+    assert format_game_over(42, 63.0) == [
+        "Game Over",
+        "Score: 42",
+        "Time played: 63",
+        "High Score: 0",
+        RESTART_PROMPT,
+        NEW_GAME_PROMPT,
+    ]
+
+
+def test_format_game_over_shows_a_supplied_high_score():
+    lines = format_game_over(42, 63.0, high_score=500)
+
+    assert "High Score: 500" in lines
+
+
+def test_format_game_over_high_score_defaults_to_zero():
+    assert inspect.signature(format_game_over).parameters["high_score"].default == 0
+    assert "High Score: 0" in format_game_over(1, 1.0)
+
+
+def test_format_game_over_parameter_list():
+    assert list(inspect.signature(format_game_over).parameters) == [
+        "score",
+        "elapsed_time",
+        "high_score",
+    ]
+
+
+def test_format_game_over_has_no_apples_fields():
+    joined = "\n".join(format_game_over(1, 1.0))
+
+    assert "Apples" not in joined
+    assert "apples" not in joined
+
+
+def test_format_game_over_truncates_elapsed_seconds():
+    assert "Time played: 63" in format_game_over(0, 63.9)
+    assert "Time played: 0" in format_game_over(0, 0.4)
+
+
+def test_format_game_over_clamps_negative_elapsed():
+    assert "Time played: 0" in format_game_over(0, -2.0)
+
+
+def test_format_game_over_at_zero_values():
+    lines = format_game_over(0, 0)
+
+    assert "Score: 0" in lines
+    assert "Time played: 0" in lines
+    assert "High Score: 0" in lines
+
+
+def test_format_game_over_returns_one_string_per_line():
+    lines = format_game_over(42, 63.0, high_score=500)
+
+    for line in lines:
+        assert isinstance(line, str)
+        assert line
+        assert "\n" not in line
+
+
+def test_format_game_over_mentions_both_key_labels():
+    joined = "\n".join(format_game_over(1, 1.0))
+
+    assert RESTART_KEY_LABEL in joined
+    assert NEW_GAME_KEY_LABEL in joined
+
+
+def test_game_over_prompts_are_built_from_the_key_labels():
+    assert RESTART_KEY_LABEL in RESTART_PROMPT
+    assert NEW_GAME_KEY_LABEL in NEW_GAME_PROMPT
+
+
+def test_key_labels_are_distinct_single_uppercase_characters():
+    assert RESTART_KEY_LABEL != NEW_GAME_KEY_LABEL
+    for label in (RESTART_KEY_LABEL, NEW_GAME_KEY_LABEL):
+        assert len(label) == 1
+        assert label.isupper()
+
+
+# --- Renderer: draw_game_over (non-pixel smoke tests) -------------------------------
+
+
+def test_draw_game_over_runs_headlessly():
+    renderer = Renderer()
+    surface = pygame.Surface(window_size(3, 4))
+
+    renderer.draw_game_over(surface, score=42, elapsed_time=63.0)
+
+
+def test_draw_game_over_accepts_an_explicit_high_score():
+    renderer = Renderer()
+    surface = pygame.Surface(window_size(3, 4))
+
+    renderer.draw_game_over(surface, score=42, elapsed_time=63.0, high_score=500)
+
+
+def test_draw_game_over_marks_the_surface():
+    renderer = Renderer()
+    surface = pygame.Surface(window_size(3, 4))
+    surface.fill(COLOR_BACKGROUND)
+
+    renderer.draw_game_over(surface, score=42, elapsed_time=63.0)
+
+    center = (surface.get_width() // 2, surface.get_height() // 2)
+    assert surface.get_at(center)[:3] != COLOR_BACKGROUND
+
+
+def test_draw_game_over_dims_the_whole_surface():
+    renderer = Renderer()
+    surface = pygame.Surface(window_size(3, 4))
+    surface.fill(COLOR_BACKGROUND)
+
+    renderer.draw_game_over(surface, score=42, elapsed_time=63.0)
+
+    corner = (0, 0)
+    assert surface.get_at(corner)[:3] != COLOR_BACKGROUND
+
+
+def test_draw_frame_then_draw_game_over_composes():
+    renderer = Renderer()
+    surface = pygame.Surface(window_size(3, 4))
+    board = _small_board()
+    grid_before = [row[:] for row in board.grid]
+    apples_before = board.apples_remaining
+
+    renderer.draw_frame(surface, board, score=42, seconds_remaining=0)
+    renderer.draw_game_over(surface, score=42, elapsed_time=63.0)
+
+    assert board.grid == grid_before
+    assert board.apples_remaining == apples_before
+
+
+def test_expired_timer_remaining_renders_as_zero_time():
+    from fruitbox.ui.app import Timer
+
+    timer = Timer(0, end_time=100)
+    timer.update(105_000)
+
+    assert timer.remaining == pytest.approx(-5.0)
+    assert format_hud(0, timer.remaining, 0) == "Score: 0   Time: 0   Apples: 0"

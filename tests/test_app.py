@@ -1,9 +1,11 @@
-"""Tests for drag state tracking and move application on release (SPEC.md FR10).
+"""Tests for drag/timer/session state and move application (SPEC.md FR10-FR12).
 
-Covers ``apply_selection`` (the FR10 rule: apply a legal candidate, discard
-an illegal one with no state change) and ``Drag`` (the UI's only stateful
-piece so far -- anchor pixel, current pixel, and the candidate rectangle
-between them).
+Covers ``apply_selection`` (FR10: apply a legal candidate, discard an
+illegal one with no state change), ``Drag`` (anchor pixel, current pixel,
+and the candidate rectangle between them), ``Timer`` (FR11's countdown,
+driven by externally supplied millisecond tick values -- no clock, no fake
+clock, just plain integers), and ``Session`` (FR11/FR12: game-over,
+reset, new game -- the object owning an engine + a timer together).
 
 ``apply_selection`` returns nothing (SPEC.md/plan-discussion decision): a
 caller cannot read back whether a move landed, only observe it via engine
@@ -12,20 +14,30 @@ state. Every test below therefore asserts on ``engine.board.grid``,
 return value.
 
 All headless -- no display, no event loop. ``fruitbox.ui.app`` imports no
-pygame at this stage (only ``fruitbox.config``, ``fruitbox.engine``, and
-``fruitbox.ui.input``), so this file needs no ``pytest.importorskip``.
+pygame and no ``time`` at this stage (only ``fruitbox.config``,
+``fruitbox.engine``, and ``fruitbox.ui.input``), so this file needs no
+``pytest.importorskip``.
 """
 
+import inspect
 import random
 
 import pytest
 
-from fruitbox.config import CELL_SIZE_PX, GRID_ORIGIN_X_PX, GRID_ORIGIN_Y_PX, HUD_HEIGHT_PX
+from fruitbox.config import (
+    CELL_SIZE_PX,
+    GRID_ORIGIN_X_PX,
+    GRID_ORIGIN_Y_PX,
+    HUD_HEIGHT_PX,
+    TARGET_SUM,
+    TIMER_SECONDS,
+)
 from fruitbox.engine.board import BoardState
 from fruitbox.engine.game import GameEngine
 from fruitbox.engine.moves import Move
 from fruitbox.solver.move_scanner import find_legal_moves
-from fruitbox.ui.app import Drag, apply_selection
+from fruitbox.ui import app as app_module
+from fruitbox.ui.app import Drag, Session, Timer, apply_selection
 
 
 def _cell_pixel_center(row: int, col: int) -> tuple[int, int]:
@@ -387,3 +399,476 @@ def test_apply_selection_deltas_agree_with_is_legal_and_count_apples_on_random_b
 
     assert total_expected == initial_apples - engine.board.apples_remaining
     assert total_expected == engine.score
+
+
+# --- Timer -------------------------------------------------------------------------
+
+
+def test_fresh_timer_is_at_zero_elapsed_and_full_remaining():
+    t = Timer(0)
+
+    assert t.duration == 0
+    assert t.remaining == TIMER_SECONDS
+    assert t.expired is False
+    assert t.stopped is False
+
+
+def test_end_time_defaults_to_config_timer_seconds():
+    assert Timer(0).remaining == TIMER_SECONDS
+
+
+def test_update_advances_elapsed_and_shrinks_remaining():
+    t = Timer(0, end_time=100)
+
+    t.update(30_000)
+
+    assert t.duration == 30_000
+    assert t.remaining == pytest.approx(70.0)
+
+
+def test_duration_is_measured_from_start_ticks():
+    t = Timer(5_000, end_time=100)
+
+    t.update(8_000)
+
+    assert t.duration == 3_000
+    assert t.remaining == pytest.approx(97.0)
+
+
+def test_successive_updates_are_absolute_not_cumulative():
+    t = Timer(0)
+
+    t.update(1_000)
+    t.update(4_000)
+
+    assert t.duration == 4_000
+
+
+def test_remaining_goes_negative_past_end_time():
+    t = Timer(0, end_time=100)
+
+    t.update(105_000)
+
+    assert t.remaining == pytest.approx(-5.0)
+
+
+def test_duration_is_in_milliseconds_and_remaining_in_seconds():
+    t = Timer(0, end_time=TIMER_SECONDS)
+
+    t.update(1_000)
+
+    assert t.duration == 1_000
+    assert TIMER_SECONDS - t.remaining == pytest.approx(1.0)
+
+
+def test_backwards_tick_yields_smaller_elapsed():
+    t = Timer(0)
+
+    t.update(5_000)
+    t.update(2_000)
+
+    assert t.duration == 2_000
+
+
+def test_not_expired_just_before_end_time():
+    t = Timer(0, end_time=100)
+
+    t.update(99_999)
+
+    assert t.expired is False
+
+
+def test_not_expired_exactly_at_end_time():
+    t = Timer(0, end_time=100)
+
+    t.update(100_000)
+
+    assert t.expired is False
+    assert t.remaining == pytest.approx(0.0)
+
+
+def test_expired_one_tick_past_end_time():
+    t = Timer(0, end_time=100)
+
+    t.update(100_001)
+
+    assert t.expired is True
+
+
+@pytest.mark.parametrize("ticks", [0, 1, 50_000, 99_999, 100_000, 100_001, 250_000])
+def test_expired_agrees_with_remaining_sign(ticks):
+    t = Timer(0, end_time=100)
+
+    t.update(ticks)
+
+    assert t.expired == (t.remaining < 0)
+
+
+def test_custom_end_time_is_honoured():
+    t = Timer(0, end_time=5)
+
+    t.update(5_000)
+    assert t.expired is False
+
+    t.update(5_001)
+    assert t.expired is True
+
+
+def test_fractional_end_time():
+    t = Timer(0, end_time=0.5)
+
+    t.update(500)
+    assert t.expired is False
+
+    t.update(501)
+    assert t.expired is True
+
+
+def test_stop_freezes_elapsed_and_remaining():
+    t = Timer(0, end_time=100)
+
+    t.update(30_000)
+    t.stop()
+    t.update(90_000)
+
+    assert t.duration == 30_000
+    assert t.remaining == pytest.approx(70.0)
+
+
+def test_stop_is_idempotent():
+    t = Timer(0, end_time=100)
+
+    t.update(30_000)
+    t.stop()
+    t.stop()
+    t.update(90_000)
+
+    assert t.duration == 30_000
+
+
+def test_a_stopped_expired_timer_stays_expired():
+    t = Timer(0, end_time=100)
+
+    t.update(200_000)
+    t.stop()
+    t.update(0)
+
+    assert t.expired is True
+
+
+def test_restart_zeroes_elapsed_from_the_given_tick():
+    t = Timer(0, end_time=100)
+
+    t.update(50_000)
+    t.restart(50_000)
+
+    assert t.duration == 0
+    assert t.remaining == pytest.approx(100.0)
+
+    t.update(53_000)
+    assert t.duration == 3_000
+
+
+def test_restart_unfreezes_a_stopped_timer():
+    t = Timer(0, end_time=100)
+
+    t.stop()
+    t.restart(60_000)
+
+    assert t.stopped is False
+
+    t.update(63_000)
+    assert t.duration == 3_000
+
+
+def test_restart_clears_expiry():
+    t = Timer(0, end_time=100)
+
+    t.update(200_000)
+    t.restart(200_000)
+
+    assert t.expired is False
+    assert t.remaining == pytest.approx(100.0)
+
+
+def test_restart_requires_a_tick_value():
+    assert inspect.signature(Timer.restart).parameters["ticks"].default is inspect.Parameter.empty
+
+
+def test_timer_init_requires_a_tick_value():
+    assert inspect.signature(Timer.__init__).parameters["start_ticks"].default is inspect.Parameter.empty
+
+
+def test_timer_reads_no_clock():
+    assert not hasattr(app_module, "time")
+    assert not hasattr(app_module, "pygame")
+
+
+def test_a_pygame_style_tick_sequence_drives_the_timer_monotonically():
+    t = Timer(0, end_time=100)
+
+    remaining_values = []
+    expired_flags = []
+    for ticks in range(0, 120_001, 16):
+        t.update(ticks)
+        remaining_values.append(t.remaining)
+        expired_flags.append(t.expired)
+
+    assert remaining_values == sorted(remaining_values, reverse=True)
+    # expired flips from False to True exactly once
+    transitions = sum(
+        1 for a, b in zip(expired_flags, expired_flags[1:]) if a != b
+    )
+    assert transitions == 1
+    assert expired_flags[0] is False
+    assert expired_flags[-1] is True
+
+
+# --- Session -----------------------------------------------------------------------
+
+
+def test_new_session_has_a_full_timer_and_an_untouched_engine():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+
+    assert session.timer.remaining == TIMER_SECONDS
+    assert session.engine.score == 0
+    assert session.is_over is False
+
+
+def test_session_accepts_an_injected_timer():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0, end_time=5))
+
+    assert session.timer.remaining == 5
+
+
+def test_session_update_forwards_ticks_to_the_timer():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+
+    session.update(12_000)
+
+    assert session.timer.duration == 12_000
+
+
+def test_session_is_over_when_the_timer_expires():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0, end_time=5))
+
+    session.update(5_001)
+
+    assert session.is_over is True
+
+
+def test_session_is_not_over_at_exactly_the_end_time():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0, end_time=5))
+
+    session.update(5_000)
+
+    assert session.is_over is False
+
+
+def test_session_is_over_when_the_board_is_cleared():
+    session = Session(GameEngine.load([[4, 6]]))
+    apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
+
+    session.update(1_000)
+
+    assert session.is_over is True
+
+
+def test_session_is_not_over_while_apples_remain_and_time_is_left():
+    # A deliberately stuck board -- no legal moves -- must NOT read as over.
+    session = Session(GameEngine.load([[9, 9], [9, 9]]))
+
+    session.update(1_000)
+
+    assert session.is_over is False
+
+
+def test_session_update_stops_the_timer_once_over():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0, end_time=100))
+
+    session.update(100_001)
+    before = session.summary()
+    session.update(200_000)
+    after = session.summary()
+
+    assert session.timer.stopped is True
+    assert before == after
+
+
+def test_session_update_records_the_crossing_tick_before_stopping():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0, end_time=100))
+
+    session.update(100_001)
+
+    assert session.timer.duration == 100_001
+
+
+def test_session_summary_returns_score_and_elapsed_seconds():
+    session = Session(GameEngine.load([[4, 6]]))
+    apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
+
+    session.update(12_000)
+
+    assert session.summary() == (2, pytest.approx(12.0))
+
+
+def test_session_summary_is_score_then_elapsed_seconds():
+    session = Session(GameEngine.load([[4, 6]]))
+    session.update(3_000)
+
+    score, elapsed = session.summary()
+
+    assert isinstance(score, int)
+    assert elapsed == pytest.approx(session.timer.duration / 1000)
+
+
+def test_session_summary_on_a_fresh_session_is_zero_zero():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+
+    assert session.summary() == (0, pytest.approx(0.0))
+
+
+def test_session_reset_restores_the_board_and_score():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
+
+    session.reset(40_000)
+
+    assert session.engine.board.grid == [[4, 6], [1, 1]]
+    assert session.engine.score == 0
+    assert session.engine.board.apples_remaining == 4
+
+
+def test_session_reset_restarts_the_timer_from_the_given_tick():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session.update(40_000)
+
+    session.reset(40_000)
+
+    assert session.timer.duration == 0
+    assert session.timer.remaining == pytest.approx(TIMER_SECONDS)
+
+    session.update(41_000)
+    assert session.timer.duration == 1_000
+
+
+def test_session_reset_after_expiry_resumes_play():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0, end_time=100))
+    session.update(200_000)
+    assert session.is_over is True
+
+    session.reset(200_000)
+
+    assert session.is_over is False
+    assert session.timer.stopped is False
+
+    session.update(200_500)
+    assert session.timer.duration == 500
+
+
+def test_session_reset_after_a_full_clear_makes_the_session_playable_again():
+    session = Session(GameEngine.load([[4, 6]]))
+    apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
+    session.update(1_000)
+    assert session.is_over is True
+
+    session.reset(1_000)
+
+    assert session.is_over is False
+    assert session.engine.board.grid == [[4, 6]]
+
+
+def test_session_new_game_replaces_the_engine_and_zeroes_the_score():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
+    engine_before = session.engine
+
+    session.new_game(0)
+
+    assert session.engine is not engine_before
+    assert session.engine.score == 0
+    assert session.engine.board.apples_remaining == session.engine.board.rows * session.engine.board.cols
+
+
+def test_session_new_game_with_a_seed_is_reproducible():
+    session_a = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session_b = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session_c = Session(GameEngine.load([[4, 6], [1, 1]]))
+
+    session_a.new_game(0, seed=7)
+    session_b.new_game(0, seed=7)
+    session_c.new_game(0, seed=8)
+
+    assert session_a.engine.board.grid == session_b.engine.board.grid
+    assert session_a.engine.board.grid != session_c.engine.board.grid
+
+
+def test_session_new_game_keeps_board_dimensions_and_value_range():
+    session = Session(GameEngine.load([[4, 6, 1], [1, 1, 1]]))
+
+    session.new_game(0, seed=3)
+
+    assert session.engine.board.rows == 2
+    assert session.engine.board.cols == 3
+    assert session.engine.board.min_value == 1
+    assert session.engine.board.max_value == 9
+
+
+def test_session_new_game_restarts_the_timer():
+    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session.update(70_000)
+
+    session.new_game(70_000)
+
+    assert session.timer.duration == 0
+    assert session.timer.remaining == pytest.approx(TIMER_SECONDS)
+
+
+def test_session_new_game_seed_is_optional():
+    params = inspect.signature(Session.new_game).parameters
+    assert params["ticks"].default is inspect.Parameter.empty
+    assert params["seed"].default is None
+
+    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session.new_game(0)
+
+    assert session.engine.board.verify() is None
+    total = sum(sum(row) for row in session.engine.board.grid)
+    assert total % TARGET_SUM == 0
+
+
+def test_session_reset_and_new_game_require_a_tick_value():
+    assert inspect.signature(Session.reset).parameters["ticks"].default is inspect.Parameter.empty
+    assert inspect.signature(Session.new_game).parameters["ticks"].default is inspect.Parameter.empty
+
+
+def test_session_full_playthrough_end_to_end():
+    session = Session(GameEngine.load([[4, 6], [3, 7]]))
+    drag = Drag(rows=2, cols=2)
+
+    def center(row, col):
+        return (
+            GRID_ORIGIN_X_PX + col * CELL_SIZE_PX + CELL_SIZE_PX // 2,
+            GRID_ORIGIN_Y_PX + row * CELL_SIZE_PX + CELL_SIZE_PX // 2,
+        )
+
+    # First move: row 0 (4+6=10).
+    drag.begin(center(0, 0))
+    drag.update(center(0, 1))
+    move = drag.release(center(0, 1))
+    apply_selection(session.engine, move)
+    session.update(10_000)
+
+    assert session.engine.score == 2
+    assert session.is_over is False
+
+    # Second move: row 1 (3+7=10) -- clears the board.
+    drag.begin(center(1, 0))
+    drag.update(center(1, 1))
+    move = drag.release(center(1, 1))
+    apply_selection(session.engine, move)
+    session.update(20_000)
+
+    assert session.engine.score == 4
+    assert session.is_over is True
+    assert session.summary() == (4, pytest.approx(20.0))

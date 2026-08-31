@@ -1,4 +1,4 @@
-"""Drawing-only pygame scaffold: board + HUD onto a caller-supplied surface (SPEC.md FR7, section 11).
+"""Drawing-only pygame scaffold: board + HUD + game-over screen onto a caller-supplied surface (SPEC.md FR7, FR11, section 11).
 
 This module owns no window, no event loop, no clock, and no game state --
 those belong to later UI issues (``app.py``, ``input.py``). It only knows how
@@ -43,9 +43,21 @@ governs what happens on release (FR10); that is a later issue's concern.
 This module never mutates the ``BoardState`` it is given, and -- matching
 ``ui/input.py``'s posture -- tracks no drag state of its own: every drawing
 call takes an already-computed candidate ``Move`` (or ``None``), leaving
-"is the mouse currently down, and where" to a future ``app.py``. Depends on
+"is the mouse currently down, and where" to ``ui/app.py``. Depends on
 ``fruitbox.engine`` and ``fruitbox.config`` plus pygame; nothing else in the
 project may depend on ``fruitbox.ui`` (SPEC.md section 7).
+
+**Game-over screen (FR11).** :meth:`Renderer.draw_game_over` draws a dimming
+overlay plus a centered summary (score, time played, session high score, and
+the restart/new-game prompts) over an already-drawn frame -- it is a
+separate method from :meth:`Renderer.draw_frame` rather than a parameter on
+it, since it needs elapsed time and a high score that ``draw_frame`` has no
+business knowing. The high score shown is currently always a caller-supplied
+placeholder (``0`` by default); real session high-score tracking is a later
+issue's job. The restart/new-game key labels shown in the prompts live in
+``fruitbox.config`` (not here), so this module's rendered text and a future
+key-handling module can both reference the same constants without either
+importing the other.
 """
 
 from __future__ import annotations
@@ -60,6 +72,8 @@ from ..config import (
     GRID_ORIGIN_Y_PX,
     GRID_ROWS,
     HUD_HEIGHT_PX,
+    NEW_GAME_KEY_LABEL,
+    RESTART_KEY_LABEL,
     TARGET_SUM,
 )
 from ..engine.board import BoardState
@@ -119,6 +133,32 @@ _DIGIT_FONT_RATIO = 0.6
 
 #: HUD font size as a fraction of the HUD strip height.
 _HUD_FONT_RATIO = 0.5
+
+#: Game-over screen heading.
+GAME_OVER_TITLE = "Game Over"
+
+#: Game-over restart prompt, built from the shared key-label constant so the
+#: displayed text and the eventual key binding (issue #19) can't drift apart.
+RESTART_PROMPT = f"Press {RESTART_KEY_LABEL} to replay this board"
+
+#: Game-over new-game prompt, built the same way as RESTART_PROMPT.
+NEW_GAME_PROMPT = f"Press {NEW_GAME_KEY_LABEL} for a new board"
+
+#: Text colour for the game-over screen. Kept separate from COLOR_HUD_TEXT so
+#: the two can be tuned independently even though both start out white.
+COLOR_GAME_OVER_TEXT = (255, 255, 255)
+
+#: Dimming wash drawn over the final board on the game-over screen.
+COLOR_GAME_OVER_OVERLAY = (0, 0, 0)
+
+#: Alpha (0-255) of the game-over dimming wash.
+_GAME_OVER_OVERLAY_ALPHA = 190
+
+#: Game-over font size as a fraction of the HUD strip height.
+_GAME_OVER_FONT_RATIO = 0.7
+
+#: Line pitch on the game-over screen, as a multiple of the font's line height.
+_GAME_OVER_LINE_SPACING_RATIO = 1.3
 
 
 def cell_rect(row: int, col: int) -> pygame.Rect:
@@ -205,6 +245,38 @@ def format_hud(score: int, seconds_remaining: float, apples_remaining: int) -> s
     return f"Score: {score}   Time: {seconds}   Apples: {apples_remaining}"
 
 
+def format_game_over(score: int, elapsed_time: float, high_score: int = 0) -> list[str]:
+    """Format the game-over screen: one string per line to render.
+
+    Lines, in order: title, final score, time played, session high score,
+    and both restart/new-game prompts. Time played is a bare integer count
+    of seconds, truncated toward zero (not rounded) and clamped at 0 --
+    the same posture ``format_hud`` takes for time remaining. Labeled "Time
+    played" rather than "Time" so it can't be misread as the HUD's
+    time-*remaining* field.
+
+    ``high_score`` defaults to ``0`` -- a placeholder. Real session
+    high-score tracking is a later issue's job; this parameter exists now so
+    that issue can start passing a real value with no signature change.
+    No apples-cleared/apples-total fields -- score and elapsed time are the
+    only game-over numbers this screen reports.
+
+    Returns a list (one entry per line) rather than a single string, since
+    ``pygame.font.Font.render`` does not lay out embedded newlines --
+    something has to split the text, and doing it here makes the split
+    explicit and exactly testable.
+    """
+    seconds = max(0, int(elapsed_time))
+    return [
+        GAME_OVER_TITLE,
+        f"Score: {score}",
+        f"Time played: {seconds}",
+        f"High Score: {high_score}",
+        RESTART_PROMPT,
+        NEW_GAME_PROMPT,
+    ]
+
+
 class Renderer:
     """Draws a board and HUD onto a caller-supplied ``pygame.Surface``.
 
@@ -217,6 +289,7 @@ class Renderer:
         pygame.font.init()
         self._digit_font = pygame.font.SysFont(None, int(CELL_SIZE_PX * _DIGIT_FONT_RATIO))
         self._hud_font = pygame.font.SysFont(None, int(HUD_HEIGHT_PX * _HUD_FONT_RATIO))
+        self._game_over_font = pygame.font.SysFont(None, int(HUD_HEIGHT_PX * _GAME_OVER_FONT_RATIO))
 
     def draw_board(self, surface: pygame.Surface, board: BoardState) -> None:
         """Draw every occupied cell as an apple; leave empty cells untouched.
@@ -296,6 +369,39 @@ class Renderer:
 
         pygame.draw.rect(surface, color, rect, width=_SELECTION_BORDER_WIDTH_PX)
 
+    def draw_game_over(
+        self,
+        surface: pygame.Surface,
+        score: int,
+        elapsed_time: float,
+        high_score: int = 0,
+    ) -> None:
+        """Draw the game-over screen: a dimming overlay plus a centered summary (FR11).
+
+        Draws no board and takes none -- callers draw the final frame first
+        (via :meth:`draw_frame`) and call this on top, since it needs
+        ``elapsed_time``/``high_score``, which ``draw_frame`` has no
+        business knowing. Owns no state of its own.
+        """
+        overlay = pygame.Surface(surface.get_size())
+        overlay.set_alpha(_GAME_OVER_OVERLAY_ALPHA)
+        overlay.fill(COLOR_GAME_OVER_OVERLAY)
+        surface.blit(overlay, (0, 0))
+
+        lines = format_game_over(score, elapsed_time, high_score)
+        rendered = [self._game_over_font.render(line, True, COLOR_GAME_OVER_TEXT) for line in lines]
+
+        line_height = self._game_over_font.get_linesize()
+        spacing = int(line_height * _GAME_OVER_LINE_SPACING_RATIO)
+        block_height = spacing * (len(rendered) - 1) + line_height
+        top = surface.get_height() // 2 - block_height // 2
+
+        for i, text in enumerate(rendered):
+            rect = text.get_rect()
+            rect.centerx = surface.get_width() // 2
+            rect.top = top + i * spacing
+            surface.blit(text, rect)
+
     def draw_frame(
         self,
         surface: pygame.Surface,
@@ -315,6 +421,12 @@ class Renderer:
         drag, or ``None`` when no drag is active -- this method holds no drag
         state of its own; the caller computes ``selection`` fresh each frame
         (e.g. via ``ui.input.selection_from_drag``) and passes it in.
+
+        When the game has ended, the caller additionally calls
+        :meth:`draw_game_over` after this method, so the "single call per
+        frame" claim above stays accurate -- game-over is a separate method
+        rather than a parameter here because it needs elapsed time and a
+        high score, which this method has no business knowing.
         """
         surface.fill(COLOR_BACKGROUND)
         self.draw_hud(surface, score, seconds_remaining, board.apples_remaining)

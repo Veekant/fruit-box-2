@@ -1,33 +1,49 @@
-"""Drag state tracking and move application on release (SPEC.md FR10, section 11).
+"""Drag state, move application, timer, and session (SPEC.md FR10-FR12, section 11).
 
-This module currently holds only two things: :class:`Drag`, the UI's only
-stateful piece so far (everything in ``renderer.py``/``input.py`` before it
-is stateless), and :func:`apply_selection`, the FR10 rule itself -- "on
-release, apply the move if legal; discard with no state change if not." The
+This module holds :class:`Drag` (FR8/FR9's in-progress drag state),
+:func:`apply_selection` (FR10's "apply on release if legal" rule),
+:class:`Timer` (FR11's countdown), and :class:`Session` (FR11/FR12's
+game-over/reset/new-game rules, which need both an engine and a timer). The
 pygame main loop (``pygame.display``, the clock, the event pump) lands in a
 later issue; this module composes with it rather than anticipating it.
 
 Deliberately imports no pygame at this stage: :class:`Drag` takes bare
-``(x, y)`` pixel positions, not ``pygame.event.Event`` objects, so this
-module (and its tests) stay display-free, matching ``ui/input.py``'s own
-no-pygame-import discipline. Removal is instant -- ``Renderer`` already
-redraws from live board state each frame, so no rendering change or
-animation is needed here (SPEC.md section 3 explicitly permits this).
+``(x, y)`` pixel positions rather than ``pygame.event.Event`` objects, and
+:class:`Timer` takes bare millisecond tick integers rather than reading any
+clock itself, so this module (and its tests) stay display-free, matching
+``ui/input.py``'s own no-pygame-import discipline. Removal is instant --
+``Renderer`` already redraws from live board state each frame, so no
+rendering change or animation is needed here (SPEC.md section 3 explicitly
+permits this).
 
 :class:`Drag` holds only pixel state -- no :class:`~fruitbox.engine.game.GameEngine`
 reference, no board. It defers all geometry to
 :func:`~fruitbox.ui.input.selection_from_drag`, so drag tracking and board
-mutation stay separable: a future "new game" (issue #18) can swap the engine
-out from under a `Drag` object without either needing to know about the
-other.
+mutation stay separable: :meth:`Session.new_game` can swap the engine out
+from under a `Drag` object without either needing to know about the other.
+
+:class:`Timer` is pure tick arithmetic with zero dependencies: it stores the
+tick value it started at and the tick value it was last told about via
+:meth:`Timer.update`, and computes elapsed/remaining/expired from the
+difference. It never reads a clock itself -- the caller (eventually the
+main loop in issue #19) supplies tick values, which will be
+``pygame.time.get_ticks()`` (an int count of milliseconds since
+``pygame.init()``), read once per frame. This keeps ``Timer`` -- and this
+whole module -- free of any ``time``/pygame import, and makes it directly
+testable with plain integers.
 """
 
 from __future__ import annotations
 
-from ..config import GRID_COLS, GRID_ROWS
+from ..config import GRID_COLS, GRID_ROWS, TIMER_SECONDS
+from ..engine.board import BoardState
 from ..engine.game import GameEngine
 from ..engine.moves import Move
 from .input import selection_from_drag
+
+#: The one place the milliseconds-per-second conversion is named. A unit
+#: conversion, not a tunable, so it lives here rather than in config.py.
+_MS_PER_SECOND = 1000
 
 
 def apply_selection(engine: GameEngine, move: Move | None) -> None:
@@ -138,3 +154,190 @@ class Drag:
         """Abandon the current drag with no result. Idempotent."""
         self._start = None
         self._current = None
+
+
+class Timer:
+    """A countdown driven by externally supplied millisecond tick values (SPEC.md FR11).
+
+    Reads no clock itself. The caller pushes tick values in via
+    :meth:`update`; in the eventual main loop (issue #19) that value will be
+    ``pygame.time.get_ticks()``, read once per frame. This keeps ``Timer``
+    (and this module) free of any ``time``/pygame import, and makes it
+    directly testable with plain integers instead of a fake-clock object.
+
+    Elapsed time (:attr:`duration`) is measured in **milliseconds**, matching
+    the tick values it is fed. :attr:`remaining` and the constructor's
+    ``end_time`` are in **seconds**, matching ``Renderer.draw_hud`` /
+    ``format_hud``'s ``seconds_remaining`` parameter -- this class is the
+    only place the millisecond/second unit conversion happens.
+    """
+
+    def __init__(self, start_ticks: int, end_time: float = TIMER_SECONDS) -> None:
+        """Start counting from ``start_ticks``, expiring after ``end_time`` seconds.
+
+        Args:
+            start_ticks: The tick value "now" -- typically the caller's
+                current ``pygame.time.get_ticks()`` reading at construction
+                time. Required rather than defaulted, so a construction site
+                can never silently start the clock from the wrong epoch.
+            end_time: Seconds until expiry. Defaults to
+                ``config.TIMER_SECONDS``.
+        """
+        self._start_ticks = start_ticks
+        self._current_ticks = start_ticks
+        self._end_time = end_time
+        self._stopped = False
+
+    @property
+    def duration(self) -> int:
+        """Elapsed milliseconds since ``start_ticks`` (or the last :meth:`restart`).
+
+        Named ``duration`` per this class's design, even though it reports
+        *elapsed* time rather than the configured target -- the target lives
+        in the constructor's ``end_time``, never exposed under this name.
+        """
+        return self._current_ticks - self._start_ticks
+
+    @property
+    def remaining(self) -> float:
+        """Seconds remaining until expiry. Goes negative past expiry -- never
+        clamped here; ``format_hud`` already clamps for display.
+        """
+        return self._end_time - self.duration / _MS_PER_SECOND
+
+    @property
+    def expired(self) -> bool:
+        """Whether elapsed time has gone **strictly past** ``end_time``.
+
+        At exactly ``end_time`` (``remaining == 0.0``) the timer is *not yet*
+        expired; expiry begins at the first tick past it -- at most 1ms late
+        on a millisecond clock. Implemented via :attr:`remaining` so the two
+        accessors can never disagree.
+        """
+        return self.remaining < 0
+
+    @property
+    def stopped(self) -> bool:
+        """Whether the timer is currently frozen (see :meth:`stop`)."""
+        return self._stopped
+
+    def update(self, ticks: int) -> None:
+        """Advance to ``ticks``. A no-op while :attr:`stopped`.
+
+        Does not guard against a ``ticks`` value earlier than the last one --
+        a backwards tick simply yields a smaller (or negative) elapsed time.
+        The caller's clock (``pygame.time.get_ticks()``) is assumed
+        monotonic; this is documented, not defended against.
+        """
+        if self._stopped:
+            return
+        self._current_ticks = ticks
+
+    def stop(self) -> None:
+        """Freeze the timer: further :meth:`update` calls are no-ops until :meth:`restart`.
+
+        Idempotent.
+        """
+        self._stopped = True
+
+    def restart(self, ticks: int) -> None:
+        """Reset elapsed time to zero, counting from ``ticks``, and un-freeze.
+
+        Un-freezes by design: a restarted game must tick again, and a
+        separate "resume" step would be a footgun with no benefit.
+
+        Args:
+            ticks: The tick value "now". Required, not defaulted -- a
+                restart happens mid-run, where defaulting to 0 would corrupt
+                elapsed-time math (the next :meth:`update` would report a
+                huge, wrong elapsed time).
+        """
+        self._start_ticks = ticks
+        self._current_ticks = ticks
+        self._stopped = False
+
+
+class Session:
+    """Owns an engine and a timer together, implementing FR11/FR12's combined rules.
+
+    The single per-frame entry point a future main loop needs:
+    :meth:`update` advances the timer and freezes it the moment the game
+    ends, so elapsed time on a game-over screen stops growing once the game
+    is actually over.
+    """
+
+    def __init__(self, engine: GameEngine, timer: Timer | None = None) -> None:
+        """Wrap ``engine`` with ``timer`` (a fresh ``Timer(0)`` by default).
+
+        Args:
+            engine: The game to play. ``Session`` reads and replaces this
+                attribute directly (see :meth:`new_game`) -- callers should
+                read ``session.engine``, not hold a separate reference.
+            timer: The countdown to pair with it. Injectable so tests can use
+                a specific ``end_time`` or starting tick.
+        """
+        self.engine = engine
+        self.timer = timer if timer is not None else Timer(0)
+
+    @property
+    def is_over(self) -> bool:
+        """Whether the game has ended: the timer expired, or the board is fully cleared (FR11).
+
+        ``GameEngine.is_terminal()`` is deliberately "board fully cleared,"
+        not "no legal moves remain" (see its own docstring) -- a player
+        stuck with apples left but no legal rectangle is *not* reported as
+        over here and must wait out the timer, by design.
+        """
+        return self.timer.expired or self.engine.is_terminal()
+
+    def update(self, ticks: int) -> None:
+        """Advance the timer to ``ticks``, then freeze it if the game just ended.
+
+        Recording the crossing tick before freezing means elapsed time is
+        exact up to the instant the game ended, not the previous frame's
+        value.
+        """
+        self.timer.update(ticks)
+        if self.is_over:
+            self.timer.stop()
+
+    def summary(self) -> tuple[int, float]:
+        """Return ``(score, elapsed_seconds)`` for a game-over screen."""
+        return self.engine.score, self.timer.duration / _MS_PER_SECOND
+
+    def reset(self, ticks: int) -> None:
+        """Replay the current board from its initial layout, restarting the timer (FR12).
+
+        ``GameEngine.reset()`` rebinds ``engine.board`` to a fresh object, so
+        callers must read ``session.engine.board`` afterward rather than a
+        cached reference.
+
+        Args:
+            ticks: The tick value "now", forwarded to ``Timer.restart``.
+        """
+        self.engine.reset()
+        self.timer.restart(ticks)
+
+    def new_game(self, ticks: int, seed: int | None = None) -> None:
+        """Replace the board with a freshly generated one, restarting the timer (FR12).
+
+        The new board carries over the current board's dimensions and value
+        range. Replaces ``self.engine`` wholesale -- callers must read
+        ``session.engine``, not hold a separate reference.
+
+        Args:
+            ticks: The tick value "now", forwarded to ``Timer.restart``.
+            seed: Forwarded to ``BoardState.generate_board`` for reproducible
+                boards (NFR5). ``None`` (the default) generates an unseeded
+                random board.
+        """
+        old_board = self.engine.board
+        new_board = BoardState.generate_board(
+            rows=old_board.rows,
+            cols=old_board.cols,
+            seed=seed,
+            min_value=old_board.min_value,
+            max_value=old_board.max_value,
+        )
+        self.engine = GameEngine(new_board)
+        self.timer.restart(ticks)
