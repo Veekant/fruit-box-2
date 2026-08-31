@@ -2,7 +2,7 @@
 
 Depends on ``fruitbox.engine`` and ``fruitbox.solver``; nothing else in the
 project may depend on this package (SPEC.md section 7). ``renderer`` (board
-and HUD drawing) and ``input`` (pixel-drag to grid-rectangle translation)
-have landed; ``app`` currently holds drag state tracking and FR10 move
-application, with the pygame main loop still to come in a later issue.
+and HUD drawing), ``input`` (pixel-drag to grid-rectangle translation), and
+``app`` (drag/timer/session state plus the pygame main loop) have all
+landed. The game is runnable via ``python -m fruitbox.ui.app``.
 """

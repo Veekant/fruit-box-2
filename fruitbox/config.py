@@ -49,14 +49,21 @@ GRID_ORIGIN_X_PX = GRID_MARGIN_PX
 #: Y pixel coordinate of cell (0, 0)'s top-left corner.
 GRID_ORIGIN_Y_PX = HUD_HEIGHT_PX + GRID_MARGIN_PX
 
-#: Key label for "replay this board" (FR12), shown on the game-over screen.
-#: Destined to bind to ``pygame.K_r`` once a main loop exists (issue #19);
-#: kept here rather than in ``ui/renderer.py`` or ``ui/app.py`` so both the
-#: prompt text and the eventual key binding can import the same constant
-#: without an inverted or cyclic dependency between those two modules.
+#: Key label for "replay this board" (FR12), shown on the game-over screen
+#: via ``ui/renderer.py``'s ``RESTART_PROMPT``. The actual key binding is
+#: ``ui.app.RESTART_KEY`` (``pygame.K_r``) -- this module stays pygame-free
+#: (``fruitbox.engine`` imports it), so it cannot hold the pygame constant
+#: itself. Keeping this label and that binding in agreement is a manual
+#: discipline, not an enforced one: if one changes, the other must too.
 RESTART_KEY_LABEL = "R"
 
 #: Key label for "start a new random board" (FR12), shown on the game-over
-#: screen. Destined to bind to ``pygame.K_n`` once a main loop exists (issue
-#: #19); see :data:`RESTART_KEY_LABEL` for why this lives in ``config.py``.
+#: screen via ``ui/renderer.py``'s ``NEW_GAME_PROMPT``. See
+#: :data:`RESTART_KEY_LABEL` -- the same manual-sync relationship applies,
+#: to ``ui.app.NEW_GAME_KEY`` (``pygame.K_n``).
 NEW_GAME_KEY_LABEL = "N"
+
+#: Target frames per second for the main loop's ``clock.tick()`` cap. NFR4
+#: requires 30+ FPS during selection dragging; 60 is comfortably above that
+#: floor.
+TARGET_FPS = 60

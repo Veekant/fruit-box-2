@@ -13,16 +13,22 @@ state. Every test below therefore asserts on ``engine.board.grid``,
 ``engine.score``, and ``engine.board.apples_remaining`` directly, never on a
 return value.
 
-All headless -- no display, no event loop. ``fruitbox.ui.app`` imports no
-pygame and no ``time`` at this stage (only ``fruitbox.config``,
-``fruitbox.engine``, and ``fruitbox.ui.input``), so this file needs no
-``pytest.importorskip``.
+All headless -- no display, no event loop. ``fruitbox.ui.app`` now also
+contains the pygame main loop (``run``/``main``), so importing it requires
+pygame -- hence ``pytest.importorskip("pygame")`` below. The classes tested
+here (``Drag``, ``Timer``, ``Session``, ``apply_selection``) remain
+pygame-free in their own interfaces (bare tuples, bare ints), and every test
+in this file stays headless: no display, no event loop, and ``run``/``main``
+are not exercised here at all (SPEC.md section 10 -- the loop itself is
+manually/smoke-tested, see the PR's manual verification checklist).
 """
 
 import inspect
 import random
 
 import pytest
+
+pytest.importorskip("pygame")
 
 from fruitbox.config import (
     CELL_SIZE_PX,
@@ -36,7 +42,6 @@ from fruitbox.engine.board import BoardState
 from fruitbox.engine.game import GameEngine
 from fruitbox.engine.moves import Move
 from fruitbox.solver.move_scanner import find_legal_moves
-from fruitbox.ui import app as app_module
 from fruitbox.ui.app import Drag, Session, Timer, apply_selection
 
 
@@ -599,11 +604,6 @@ def test_timer_init_requires_a_tick_value():
     assert inspect.signature(Timer.__init__).parameters["start_ticks"].default is inspect.Parameter.empty
 
 
-def test_timer_reads_no_clock():
-    assert not hasattr(app_module, "time")
-    assert not hasattr(app_module, "pygame")
-
-
 def test_a_pygame_style_tick_sequence_drives_the_timer_monotonically():
     t = Timer(0, end_time=100)
 
@@ -628,7 +628,7 @@ def test_a_pygame_style_tick_sequence_drives_the_timer_monotonically():
 
 
 def test_new_session_has_a_full_timer_and_an_untouched_engine():
-    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
 
     assert session.timer.remaining == TIMER_SECONDS
     assert session.engine.score == 0
@@ -642,7 +642,7 @@ def test_session_accepts_an_injected_timer():
 
 
 def test_session_update_forwards_ticks_to_the_timer():
-    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
 
     session.update(12_000)
 
@@ -666,7 +666,7 @@ def test_session_is_not_over_at_exactly_the_end_time():
 
 
 def test_session_is_over_when_the_board_is_cleared():
-    session = Session(GameEngine.load([[4, 6]]))
+    session = Session(GameEngine.load([[4, 6]]), Timer(0))
     apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
 
     session.update(1_000)
@@ -676,7 +676,7 @@ def test_session_is_over_when_the_board_is_cleared():
 
 def test_session_is_not_over_while_apples_remain_and_time_is_left():
     # A deliberately stuck board -- no legal moves -- must NOT read as over.
-    session = Session(GameEngine.load([[9, 9], [9, 9]]))
+    session = Session(GameEngine.load([[9, 9], [9, 9]]), Timer(0))
 
     session.update(1_000)
 
@@ -704,7 +704,7 @@ def test_session_update_records_the_crossing_tick_before_stopping():
 
 
 def test_session_summary_returns_score_and_elapsed_seconds():
-    session = Session(GameEngine.load([[4, 6]]))
+    session = Session(GameEngine.load([[4, 6]]), Timer(0))
     apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
 
     session.update(12_000)
@@ -713,7 +713,7 @@ def test_session_summary_returns_score_and_elapsed_seconds():
 
 
 def test_session_summary_is_score_then_elapsed_seconds():
-    session = Session(GameEngine.load([[4, 6]]))
+    session = Session(GameEngine.load([[4, 6]]), Timer(0))
     session.update(3_000)
 
     score, elapsed = session.summary()
@@ -723,13 +723,13 @@ def test_session_summary_is_score_then_elapsed_seconds():
 
 
 def test_session_summary_on_a_fresh_session_is_zero_zero():
-    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
 
     assert session.summary() == (0, pytest.approx(0.0))
 
 
 def test_session_reset_restores_the_board_and_score():
-    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
     apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
 
     session.reset(40_000)
@@ -740,7 +740,7 @@ def test_session_reset_restores_the_board_and_score():
 
 
 def test_session_reset_restarts_the_timer_from_the_given_tick():
-    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
     session.update(40_000)
 
     session.reset(40_000)
@@ -767,7 +767,7 @@ def test_session_reset_after_expiry_resumes_play():
 
 
 def test_session_reset_after_a_full_clear_makes_the_session_playable_again():
-    session = Session(GameEngine.load([[4, 6]]))
+    session = Session(GameEngine.load([[4, 6]]), Timer(0))
     apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
     session.update(1_000)
     assert session.is_over is True
@@ -779,7 +779,7 @@ def test_session_reset_after_a_full_clear_makes_the_session_playable_again():
 
 
 def test_session_new_game_replaces_the_engine_and_zeroes_the_score():
-    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
     apply_selection(session.engine, Move(row_start=0, col_start=0, row_end=0, col_end=1))
     engine_before = session.engine
 
@@ -791,9 +791,9 @@ def test_session_new_game_replaces_the_engine_and_zeroes_the_score():
 
 
 def test_session_new_game_with_a_seed_is_reproducible():
-    session_a = Session(GameEngine.load([[4, 6], [1, 1]]))
-    session_b = Session(GameEngine.load([[4, 6], [1, 1]]))
-    session_c = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session_a = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
+    session_b = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
+    session_c = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
 
     session_a.new_game(0, seed=7)
     session_b.new_game(0, seed=7)
@@ -804,7 +804,7 @@ def test_session_new_game_with_a_seed_is_reproducible():
 
 
 def test_session_new_game_keeps_board_dimensions_and_value_range():
-    session = Session(GameEngine.load([[4, 6, 1], [1, 1, 1]]))
+    session = Session(GameEngine.load([[4, 6, 1], [1, 1, 1]]), Timer(0))
 
     session.new_game(0, seed=3)
 
@@ -815,7 +815,7 @@ def test_session_new_game_keeps_board_dimensions_and_value_range():
 
 
 def test_session_new_game_restarts_the_timer():
-    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
     session.update(70_000)
 
     session.new_game(70_000)
@@ -829,7 +829,7 @@ def test_session_new_game_seed_is_optional():
     assert params["ticks"].default is inspect.Parameter.empty
     assert params["seed"].default is None
 
-    session = Session(GameEngine.load([[4, 6], [1, 1]]))
+    session = Session(GameEngine.load([[4, 6], [1, 1]]), Timer(0))
     session.new_game(0)
 
     assert session.engine.board.verify() is None
@@ -843,7 +843,7 @@ def test_session_reset_and_new_game_require_a_tick_value():
 
 
 def test_session_full_playthrough_end_to_end():
-    session = Session(GameEngine.load([[4, 6], [3, 7]]))
+    session = Session(GameEngine.load([[4, 6], [3, 7]]), Timer(0))
     drag = Drag(rows=2, cols=2)
 
     def center(row, col):
